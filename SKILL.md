@@ -1,5 +1,5 @@
 ---
-name: svg-to-pptx-shapes
+name: bruce-svg-to-pptx
 description: Convert SVG files into native, editable PowerPoint shapes (DrawingML) on Windows by automating PowerPoint via COM. Use this skill whenever the user wants to turn one or more .svg files into a .pptx where each SVG is broken into editable shapes (the same result as right-clicking an inserted SVG and choosing "Convert to Shape"), or asks to batch-convert SVGs into editable PowerPoint graphics, or mentions "SVG → 形状", "SVG 转 PPT 可编辑形状", or similar. Trigger this even when the user only describes the goal ("I want my SVG icons to be editable inside the deck") without naming the conversion explicitly. Requires Windows with Microsoft PowerPoint 2016 build 1712 or later.
 ---
 
