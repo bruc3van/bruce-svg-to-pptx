@@ -62,11 +62,12 @@ Use `powershell.exe` instead of `pwsh` if PowerShell 7 is not installed.
 - `-OutputPath` (required): destination `.pptx`. If it does not exist, a new deck is created. If it exists and `-Append` is set, slides are appended; otherwise the existing file is overwritten after a confirmation prompt (skipped with `-Force`).
 - `-Append` (switch): append to the existing `OutputPath` deck rather than overwriting.
 - `-Force` (switch): skip the overwrite confirmation.
-- `-KeepGroup` (switch): do not ungroup the converted shapes. Default behavior is to leave PowerPoint's native grouping in place; this flag is reserved for future use if explicit ungrouping is added.
 
 ## How to invoke from Claude Code
 
-When the user is on Windows and asks to convert SVGs, run the script with bash/PowerShell tool. Resolve all paths to absolute paths before passing them in — PowerPoint COM is unreliable with relative paths. Surface the script's stderr to the user verbatim if it fails; the error messages distinguish between "PowerPoint not installed", "file not found", and "ExecuteMso failed for this SVG".
+When the user is on Windows and asks to convert SVGs, run the script with bash/PowerShell tool. The script resolves relative paths to absolute internally, but passing absolute paths is safer and avoids ambiguity. Surface the script's stderr to the user verbatim if it fails; the error messages distinguish between "PowerPoint not installed", "file not found", and "ExecuteMso failed for this SVG".
+
+Even if the script fails mid-run, the `finally` block guarantees PowerPoint is always closed and the COM object released — the user does not need to manually kill any PowerPoint process.
 
 After a successful run, confirm the output path and mention the fidelity caveat: PowerPoint's built-in converter handles paths, basic shapes, and solid/simple-gradient fills well, but may flatten or drop complex SVG features (filters, clipPath chains, embedded raster images, certain advanced gradient stops). If the user reports a bad conversion on a specific SVG, that's a PowerPoint limitation, not a script bug — suggest simplifying the SVG (e.g., re-exporting from Figma/Illustrator without effects) or falling back to a pure-DrawingML library.
 
@@ -76,6 +77,8 @@ After a successful run, confirm the output path and mention the fidelity caveat:
 - **Cannot run alongside another PowerPoint session reliably.** If the user has PowerPoint open, COM may attach to that instance and produce surprising results. The script detects this and warns; recommend closing other PowerPoint windows first.
 - **One SVG per slide.** v1 places each SVG centered on its own blank slide. Multi-SVG layouts are out of scope.
 - **No headless mode.** Server/CI use is not supported. For headless, recommend the pure-Python `svg2pptx` library route.
+- **ExecuteMso timing sensitivity.** The script inserts a 250 ms pause before calling `ExecuteMso("SVGEdit")` to let PowerPoint's selection state settle. On slower machines a shape may silently remain unconverted (the script output will still show it as "failed"). If this happens, increase the `Start-Sleep -Milliseconds 250` line in the script to 500 ms or more.
+- **Slide dimensions follow the presentation's page setup.** When creating a new deck, PowerPoint uses its default slide size (typically 10"×7.5" for standard or 13.33"×7.5" for widescreen, depending on the Office version). The SVG is scaled to fill that canvas while preserving its aspect ratio (letterboxed if needed). There is currently no parameter to specify a custom slide size.
 
 ## Verifying the output
 
