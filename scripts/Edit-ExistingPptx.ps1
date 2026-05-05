@@ -74,9 +74,14 @@
 
         Title     string         first PP_TITLE / PP_CENTER_TITLE placeholder
         Subtitle  string         first PP_SUBTITLE placeholder
-        Body      string[]       Nth PP_BODY / PP_OBJECT placeholder (in order)
+        Body      string|string[] Body placeholder text. One body placeholder +
+                                  array joins items as separate lines; multiple
+                                  body placeholders map by order.
         Date      string         first PP_DATE placeholder
         Footer    string         first PP_FOOTER placeholder
+        ShapeTexts object[]      match text boxes by name/shapeName or
+                                  altText/alternativeText, then set text
+        Replacements object[]    find/replace across all text-bearing shapes
 
     Example (TEXT mode — fixed slide indices):
 
@@ -89,8 +94,8 @@
     the destination slide indices are computed by the script.
 
 .PARAMETER ClearContent
-    Before inserting SVG, delete non-structural shapes (anything that isn't a
-    title / subtitle / footer / slide-number / date placeholder).
+    Before inserting SVG, delete non-structural shapes whose centre point falls
+    inside the content zone. Template chrome outside that zone is preserved.
 
 .PARAMETER NoBackup
     Skip creating .bak.pptx of the original.
@@ -105,7 +110,13 @@
           "edits": [
             { "type": "text",   "slide": 1,
               "title": "...", "subtitle": "...", "body": ["..."],
-              "date": "...", "footer": "..." },
+              "date": "...", "footer": "...",
+              "shapeTexts": [
+                { "shapeName": "CoverTagline", "text": "..." }
+              ],
+              "replacements": [
+                { "find": "{{old}}", "replace": "new" }
+              ] },
 
             { "type": "expand", "templateSlide": 3, "insertAfter": 2,
               "clearContent": true,
@@ -162,6 +173,7 @@ $ErrorActionPreference = 'Stop'
 $msoFalse                    = 0
 $msoTrue                     = -1
 $msoGraphic                  = 28
+$msoGroup                    = 6
 $ppSaveAsOpenXMLPresentation = 24
 
 # Placeholder type IDs (PpPlaceholderType)
@@ -183,6 +195,34 @@ $KEEPER_TYPES = @($PP_TITLE, $PP_CENTER_TITLE, $PP_SUBTITLE,
 
 # Types considered "content zone" for auto-detection
 $CONTENT_PH_TYPES = @($PP_BODY, $PP_OBJECT, 8, 9, 10, 11, 12)
+
+# ──────────────────────────────────────────────────────────────
+# Helper: case-insensitive property access for hashtables/JSON objects
+# ──────────────────────────────────────────────────────────────
+function Get-EntryValue {
+    param($Object, [string]$Key)
+    if ($null -eq $Object) { return $null }
+    if ($Object -is [hashtable]) {
+        foreach ($k in $Object.Keys) {
+            if ([string]$k -ieq $Key) { return $Object[$k] }
+        }
+        return $null
+    }
+    $prop = $Object.PSObject.Properties |
+            Where-Object { $_.Name -ieq $Key } |
+            Select-Object -First 1
+    if ($prop) { return $prop.Value }
+    return $null
+}
+
+function Test-HasTextEditSpec {
+    param($Texts)
+    foreach ($key in @('Title', 'Subtitle', 'Body', 'Date', 'Footer', 'ShapeTexts', 'Replacements')) {
+        $value = Get-EntryValue -Object $Texts -Key $key
+        if ($null -ne $value) { return $true }
+    }
+    return $false
+}
 
 # ──────────────────────────────────────────────────────────────
 # Helper: enumerate .svg files from path list
@@ -279,8 +319,8 @@ function Get-SvgFit {
         $raw = Get-Content -LiteralPath $Path -Raw
         $w = $null; $h = $null
 
-        # Prefer viewBox via regex (handles namespaced <svg:svg> and odd whitespace)
-        $m = [regex]::Match($raw, 'viewBox\s*=\s*"([^"]+)"')
+        # Prefer viewBox via regex (handles namespaced <svg:svg>, single quotes, and odd whitespace)
+        $m = [regex]::Match($raw, 'viewBox\s*=\s*["'']([^"'']+)["'']')
         if ($m.Success) {
             $parts = $m.Groups[1].Value.Trim() -split '[\s,]+' | Where-Object { $_ -ne '' }
             if ($parts.Count -eq 4) {
@@ -289,11 +329,11 @@ function Get-SvgFit {
             }
         }
         if ((-not $w) -or (-not $h)) {
-            $mw = [regex]::Match($raw, '<svg[^>]*\swidth\s*=\s*"([^"]+)"')
-            $mh = [regex]::Match($raw, '<svg[^>]*\sheight\s*=\s*"([^"]+)"')
+            $mw = [regex]::Match($raw, '<svg[^>]*\swidth\s*=\s*["'']([^"'']+)["'']')
+            $mh = [regex]::Match($raw, '<svg[^>]*\sheight\s*=\s*["'']([^"'']+)["'']')
             if ($mw.Success -and $mh.Success) {
-                $w = [double]([regex]::Match($mw.Groups[1].Value, '[\d.]+').Value)
-                $h = [double]([regex]::Match($mh.Groups[1].Value, '[\d.]+').Value)
+                $w = [double]([regex]::Match($mw.Groups[1].Value, '[-+]?\d*\.?\d+').Value)
+                $h = [double]([regex]::Match($mh.Groups[1].Value, '[-+]?\d*\.?\d+').Value)
             }
         }
         if ((-not $w) -or (-not $h) -or $w -le 0 -or $h -le 0) { return $fallback }
@@ -313,10 +353,27 @@ function Get-SvgFit {
 }
 
 # ──────────────────────────────────────────────────────────────
-# Helper: remove non-structural shapes from a slide
+# Helper: remove non-structural shapes from a slide, optionally limited to zone
 # ──────────────────────────────────────────────────────────────
+function Test-ShapeCenterInZone {
+    param($Shape, $Zone)
+    if (-not $Zone) { return $true }
+    try {
+        $cx = [double]$Shape.Left + ([double]$Shape.Width / 2.0)
+        $cy = [double]$Shape.Top  + ([double]$Shape.Height / 2.0)
+        return (
+            $cx -ge [double]$Zone.Left -and
+            $cx -le ([double]$Zone.Left + [double]$Zone.Width) -and
+            $cy -ge [double]$Zone.Top -and
+            $cy -le ([double]$Zone.Top + [double]$Zone.Height)
+        )
+    } catch {
+        return $false
+    }
+}
+
 function Clear-SlideContent {
-    param($Slide)
+    param($Slide, $Zone)
     for ($i = $Slide.Shapes.Count; $i -ge 1; $i--) {
         $shape = $Slide.Shapes.Item($i)
         $keep  = $false
@@ -324,7 +381,7 @@ function Clear-SlideContent {
             $phType = $shape.PlaceholderFormat.Type
             $keep   = ($KEEPER_TYPES -contains $phType)
         } catch { }
-        if (-not $keep) {
+        if ((-not $keep) -and (Test-ShapeCenterInZone -Shape $shape -Zone $Zone)) {
             try { $shape.Delete() } catch { }
         }
     }
@@ -351,8 +408,131 @@ function Set-PhText {
 }
 
 # ──────────────────────────────────────────────────────────────
+# Helper: traverse text-bearing shapes, including grouped items
+# ──────────────────────────────────────────────────────────────
+function Invoke-ShapeRecursive {
+    param(
+        $Shape,
+        [scriptblock]$Action
+    )
+
+    & $Action $Shape
+
+    try {
+        if ($Shape.Type -eq $msoGroup) {
+            for ($i = 1; $i -le $Shape.GroupItems.Count; $i++) {
+                Invoke-ShapeRecursive -Shape $Shape.GroupItems.Item($i) -Action $Action
+            }
+        }
+    } catch { }
+}
+
+function Get-ShapeText {
+    param($Shape)
+    try {
+        if ($Shape.HasTextFrame -eq $msoTrue) {
+            return "$($Shape.TextFrame.TextRange.Text)"
+        }
+    } catch { }
+    return $null
+}
+
+function Set-ShapeTextIfPossible {
+    param($Shape, [string]$Text, [string]$Label)
+    try {
+        if ($Shape.HasTextFrame -eq $msoTrue) {
+            $Shape.TextFrame.TextRange.Text = $Text
+            return $true
+        }
+    } catch { }
+    Write-Warning "    $Label has no writable text frame; skipped."
+    return $false
+}
+
+function Set-ShapeTextsBySelector {
+    param($Slide, $ShapeTexts)
+    if ($null -eq $ShapeTexts) { return }
+
+    foreach ($spec in @($ShapeTexts)) {
+        $targetText = Get-EntryValue -Object $spec -Key 'Text'
+        if ($null -eq $targetText) {
+            Write-Warning "    ShapeTexts entry missing 'text'; skipped."
+            continue
+        }
+
+        $name = Get-EntryValue -Object $spec -Key 'Name'
+        if ($null -eq $name) { $name = Get-EntryValue -Object $spec -Key 'ShapeName' }
+        $altText = Get-EntryValue -Object $spec -Key 'AltText'
+        if ($null -eq $altText) { $altText = Get-EntryValue -Object $spec -Key 'AlternativeText' }
+
+        if (($null -eq $name -or "$name" -eq '') -and ($null -eq $altText -or "$altText" -eq '')) {
+            Write-Warning "    ShapeTexts entry needs 'name'/'shapeName' or 'altText'; skipped."
+            continue
+        }
+
+        $matchedRef = [ref]0
+        foreach ($shape in $Slide.Shapes) {
+            Invoke-ShapeRecursive -Shape $shape -Action {
+                param($s)
+                $isMatch = $false
+                try {
+                    if ($null -ne $name -and "$name" -ne '' -and "$($s.Name)" -ieq "$name") {
+                        $isMatch = $true
+                    }
+                } catch { }
+                try {
+                    if ($null -ne $altText -and "$altText" -ne '' -and "$($s.AlternativeText)" -ieq "$altText") {
+                        $isMatch = $true
+                    }
+                } catch { }
+                if ($isMatch) {
+                    if (Set-ShapeTextIfPossible -Shape $s -Text "$targetText" -Label "Shape '$($s.Name)'") {
+                        $matchedRef.Value++
+                    }
+                }
+            }
+        }
+        if ($matchedRef.Value -eq 0) {
+            Write-Warning "    No text shape matched selector name='$name' altText='$altText'."
+        }
+    }
+}
+
+function Invoke-TextReplacements {
+    param($Slide, $Replacements)
+    if ($null -eq $Replacements) { return }
+
+    foreach ($replacement in @($Replacements)) {
+        $find = Get-EntryValue -Object $replacement -Key 'Find'
+        $replace = Get-EntryValue -Object $replacement -Key 'Replace'
+        if ($null -eq $find -or "$find" -eq '') {
+            Write-Warning "    Replacement entry missing non-empty 'find'; skipped."
+            continue
+        }
+        if ($null -eq $replace) { $replace = '' }
+
+        $matchCountRef = [ref]0
+        foreach ($shape in $Slide.Shapes) {
+            Invoke-ShapeRecursive -Shape $shape -Action {
+                param($s)
+                $current = Get-ShapeText -Shape $s
+                if ($null -ne $current -and $current.Contains("$find")) {
+                    try {
+                        $s.TextFrame.TextRange.Text = $current.Replace("$find", "$replace")
+                        $matchCountRef.Value++
+                    } catch { }
+                }
+            }
+        }
+        if ($matchCountRef.Value -eq 0) {
+            Write-Warning "    Text replacement find='$find' matched no shapes."
+        }
+    }
+}
+
+# ──────────────────────────────────────────────────────────────
 # Helper: apply a -SlideTexts hashtable entry to a slide
-#   Entry shape: @{ Title=..; Subtitle=..; Body=@(..); Date=..; Footer=.. }
+#   Entry shape: @{ Title=..; Subtitle=..; Body=..; ShapeTexts=@(...); Replacements=@(...) }
 # ──────────────────────────────────────────────────────────────
 function Set-SlideTexts {
     param($Slide, $Texts)
@@ -383,24 +563,13 @@ function Set-SlideTexts {
         if ($phType -eq $PP_FOOTER -and -not $footerPh)      { $footerPh = $shape; continue }
     }
 
-    # Hashtable accessor that works for both PS hashtable and PSCustomObject (from JSON)
-    $get = {
-        param($obj, [string]$key)
-        if ($null -eq $obj) { return $null }
-        if ($obj -is [hashtable]) {
-            foreach ($k in $obj.Keys) { if ([string]$k -ieq $key) { return $obj[$k] } }
-            return $null
-        }
-        $prop = $obj.PSObject.Properties | Where-Object { $_.Name -ieq $key } | Select-Object -First 1
-        if ($prop) { return $prop.Value }
-        return $null
-    }
-
-    $title    = & $get $Texts 'Title'
-    $subtitle = & $get $Texts 'Subtitle'
-    $body     = & $get $Texts 'Body'
-    $date     = & $get $Texts 'Date'
-    $footer   = & $get $Texts 'Footer'
+    $title       = Get-EntryValue -Object $Texts -Key 'Title'
+    $subtitle    = Get-EntryValue -Object $Texts -Key 'Subtitle'
+    $body        = Get-EntryValue -Object $Texts -Key 'Body'
+    $date        = Get-EntryValue -Object $Texts -Key 'Date'
+    $footer      = Get-EntryValue -Object $Texts -Key 'Footer'
+    $shapeTexts  = Get-EntryValue -Object $Texts -Key 'ShapeTexts'
+    $replacements = Get-EntryValue -Object $Texts -Key 'Replacements'
 
     if ($null -ne $title    -and "$title"    -ne '') { Set-PhText -Shape $titlePh    -Text "$title"    -Label 'Title' }
     if ($null -ne $subtitle -and "$subtitle" -ne '') { Set-PhText -Shape $subtitlePh -Text "$subtitle" -Label 'Subtitle' }
@@ -409,16 +578,24 @@ function Set-SlideTexts {
 
     if ($null -ne $body) {
         $arr = @($body)
-        for ($j = 0; $j -lt $arr.Count; $j++) {
-            $val = "$($arr[$j])"
-            if ($val -eq '') { continue }
-            if ($j -lt $bodyPhs.Count) {
-                Set-PhText -Shape $bodyPhs[$j] -Text $val -Label "Body[$j]"
-            } else {
-                Write-Warning "    No body placeholder #$j on this slide; '$val' skipped."
+        if ($bodyPhs.Count -eq 1 -and $arr.Count -gt 1) {
+            $joined = ($arr | ForEach-Object { "$_" }) -join "`r`n"
+            Set-PhText -Shape $bodyPhs[0] -Text $joined -Label 'Body[0]'
+        } else {
+            for ($j = 0; $j -lt $arr.Count; $j++) {
+                $val = "$($arr[$j])"
+                if ($val -eq '') { continue }
+                if ($j -lt $bodyPhs.Count) {
+                    Set-PhText -Shape $bodyPhs[$j] -Text $val -Label "Body[$j]"
+                } else {
+                    Write-Warning "    No body placeholder #$j on this slide; '$val' skipped."
+                }
             }
         }
     }
+
+    Set-ShapeTextsBySelector -Slide $Slide -ShapeTexts $shapeTexts
+    Invoke-TextReplacements -Slide $Slide -Replacements $replacements
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -461,6 +638,15 @@ function Insert-SvgIntoSlide {
         $shape.Select()
         Start-Sleep -Milliseconds 300
         $PptApp.CommandBars.ExecuteMso('SVGEdit')
+        Start-Sleep -Milliseconds 200
+        try {
+            if ($shape.Type -eq $msoGraphic) {
+                Write-Warning "    SVGEdit command completed but the inserted SVG still appears to be an msoGraphic."
+                return $false
+            }
+        } catch {
+            # PowerPoint often invalidates the original COM proxy after converting.
+        }
         return $true
     } catch {
         Write-Warning "    ExecuteMso('SVGEdit') failed: $($_.Exception.Message)"
@@ -610,7 +796,7 @@ try {
                 Write-Host ("  [{0}/{1}] {2}" -f ($i+1), $svgFiles.Count, $svg)
                 $workSlide = $pres.Slides.Item($TargetSlide + $i)
 
-                if ($ClearContent) { Clear-SlideContent -Slide $workSlide }
+                if ($ClearContent) { Clear-SlideContent -Slide $workSlide -Zone $zone }
 
                 # Apply per-SVG texts (1-based key by SVG order) or legacy -SlideTitles
                 $perSlide = $null
@@ -619,7 +805,10 @@ try {
                 } elseif ($SlideTitles -and $i -lt $SlideTitles.Count -and $SlideTitles[$i]) {
                     $perSlide = @{ Title = $SlideTitles[$i] }
                 }
-                if ($perSlide) { Set-SlideTexts -Slide $workSlide -Texts $perSlide }
+                if ($perSlide) {
+                    Set-SlideTexts -Slide $workSlide -Texts $perSlide
+                    if (Test-HasTextEditSpec -Texts $perSlide) { $textEditCount++ }
+                }
 
                 if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svg -Zone $zone) {
                     $convertedCount++
@@ -660,7 +849,7 @@ try {
                 if ($targetPos -le $templateIdx) { $templateIdx++ }
 
                 $workSlide = $pres.Slides.Item($targetPos)
-                if ($ClearContent) { Clear-SlideContent -Slide $workSlide }
+                if ($ClearContent) { Clear-SlideContent -Slide $workSlide -Zone $zone }
 
                 $perSlide = $null
                 if ($SlideTexts -and $SlideTexts.ContainsKey($i + 1)) {
@@ -668,7 +857,10 @@ try {
                 } elseif ($SlideTitles -and $i -lt $SlideTitles.Count -and $SlideTitles[$i]) {
                     $perSlide = @{ Title = $SlideTitles[$i] }
                 }
-                if ($perSlide) { Set-SlideTexts -Slide $workSlide -Texts $perSlide }
+                if ($perSlide) {
+                    Set-SlideTexts -Slide $workSlide -Texts $perSlide
+                    if (Test-HasTextEditSpec -Texts $perSlide) { $textEditCount++ }
+                }
 
                 if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svg -Zone $zone) {
                     $convertedCount++
@@ -705,7 +897,7 @@ try {
                             Write-Warning "  [manifest:insert] missing 'svg'; skipped."
                             continue
                         }
-                        $svgFile = $edit.svg
+                        $svgFile = "$($edit.svg)"
                         if (-not [IO.Path]::IsPathRooted($svgFile)) {
                             $svgFile = Join-Path $manifestDir $svgFile
                         }
@@ -723,8 +915,9 @@ try {
                         $zone = Get-ContentZone -Slide $workSlide -Override $zoneOverride `
                                                 -SlideWidth $slideWidth -SlideHeight $slideHeight
 
-                        if ($edit.clearContent) { Clear-SlideContent -Slide $workSlide }
+                        if ($edit.clearContent) { Clear-SlideContent -Slide $workSlide -Zone $zone }
                         Set-SlideTexts -Slide $workSlide -Texts $edit
+                        if (Test-HasTextEditSpec -Texts $edit) { $textEditCount++ }
 
                         if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svgFile -Zone $zone) {
                             $convertedCount++
@@ -759,7 +952,7 @@ try {
                                 Write-Warning "    item $i missing 'svg'; skipped."
                                 continue
                             }
-                            $svgFile = $svgRel
+                            $svgFile = "$svgRel"
                             if (-not [IO.Path]::IsPathRooted($svgFile)) {
                                 $svgFile = Join-Path $manifestDir $svgFile
                             }
@@ -780,8 +973,9 @@ try {
                             if ($targetPos -le $tplIdx) { $tplIdx++ }
 
                             $workSlide = $pres.Slides.Item($targetPos)
-                            if ($edit.clearContent) { Clear-SlideContent -Slide $workSlide }
+                            if ($edit.clearContent) { Clear-SlideContent -Slide $workSlide -Zone $zone }
                             Set-SlideTexts -Slide $workSlide -Texts $item
+                            if (Test-HasTextEditSpec -Texts $item) { $textEditCount++ }
 
                             if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svgFile -Zone $zone) {
                                 $convertedCount++

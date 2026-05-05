@@ -103,6 +103,10 @@ default that zone is the body placeholder of the content-template slide, or a
 margined area below the title bar if there is no body placeholder. **Design
 the SVG to fill its own viewBox without assuming a specific slide size** — the
 script preserves aspect ratio (letterbox) and centres the SVG inside the zone.
+For branded templates, do **not** redraw the template title bar, footer, logo,
+or background inside the SVG; the duplicated PowerPoint template slide provides
+those elements. The SVG should contain only the editable content illustration,
+diagram, chart, or text block that belongs inside the safe content zone.
 
 ## Prerequisites
 
@@ -166,9 +170,11 @@ hashtable describing what to write into which placeholder type:
 |------------|------------|--------------------|
 | `Title`    | `string`   | first PP_TITLE / PP_CENTER_TITLE |
 | `Subtitle` | `string`   | first PP_SUBTITLE |
-| `Body`     | `string[]` | Nth PP_BODY / PP_OBJECT (in slide order) |
+| `Body`     | `string` or `string[]` | Body placeholder text. If there is one body placeholder and an array is supplied, items are joined as separate lines; if there are multiple body placeholders, items map by order. |
 | `Date`     | `string`   | first PP_DATE |
 | `Footer`   | `string`   | first PP_FOOTER |
+| `ShapeTexts` | `object[]` | Text boxes matched by `name` / `shapeName` or `altText` / `alternativeText`; each entry needs `text`. Useful for templates that do not use placeholders. |
+| `Replacements` | `object[]` | Find/replace rules across all text-bearing shapes, including grouped shapes; each entry uses `find` and `replace`. |
 
 ```powershell
 # Edit cover (slide 1) and TOC (slide 2) only — no SVG
@@ -178,6 +184,21 @@ pwsh -File scripts\Edit-ExistingPptx.ps1 `
     -SlideTexts @{
         1 = @{ Title = '2026 战略报告'; Subtitle = '董事会汇报'; Date = '2026-05' }
         2 = @{ Title = '目录'; Body = @('市场概述','竞争格局','战略规划','执行路径') }
+    }
+```
+
+For heavily designed templates where title or TOC text is a normal PowerPoint
+text box rather than a placeholder, use `ShapeTexts` or `Replacements`:
+
+```powershell
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\branded.pptx `
+    -OutputPath   .\out.pptx `
+    -SlideTexts @{
+        1 = @{
+            ShapeTexts  = @(@{ shapeName = 'CoverHeadline'; text = '2026 战略报告' })
+            Replacements = @(@{ find = '{{subtitle}}'; replace = '董事会汇报' })
+        }
     }
 ```
 
@@ -191,7 +212,7 @@ at TargetSlide.
 | `-SvgPath`       | `.svg` file(s) or directory. |
 | `-TargetSlide`   | 1-based first-target slide. |
 | `-ContentZone`   | Override SVG zone: `"Left,Top,Width,Height"` in points. |
-| `-ClearContent`  | Strip non-structural shapes before inserting. |
+| `-ClearContent`  | Strip non-structural shapes whose centre falls inside the content zone before inserting. Template chrome outside the safe zone is preserved. |
 | `-SlideTitles`   | One title per SVG (legacy shortcut). |
 | `-SlideTexts`    | Per-SVG hashtable (key = 1-based SVG index). |
 
@@ -216,7 +237,7 @@ content zone (placeholder-detected or default margin below the title).
 | `-ContentSlide`     | last slide  | Index to duplicate as the content template. |
 | `-InsertAfterSlide` | last slide  | New slides go after this index. |
 | `-ContentZone`      | auto-detect | Override placement: `"Left,Top,Width,Height"` in points. |
-| `-ClearContent`     | off         | Strip non-structural shapes from each duplicate before inserting. |
+| `-ClearContent`     | off         | Strip non-structural shapes whose centre falls inside the content zone before inserting. Template chrome outside the safe zone is preserved. |
 | `-SlideTitles`      | —           | One title per SVG (legacy shortcut). |
 | `-SlideTexts`       | —           | Per-SVG hashtable (key = 1-based SVG index). |
 
@@ -258,6 +279,9 @@ pwsh -File scripts\Edit-ExistingPptx.ps1 `
       "slide":    1,
       "title":    "2026 年度战略报告",
       "subtitle": "董事会汇报",
+      "shapeTexts": [
+        { "shapeName": "CoverTagline", "text": "内部讨论稿" }
+      ],
       "date":     "2026-05"
     },
     {
@@ -292,9 +316,9 @@ Edit types and their fields:
 
 | `type`     | Required fields              | Optional fields                                                   |
 |------------|------------------------------|-------------------------------------------------------------------|
-| `"text"`   | `slide`                      | `title`, `subtitle`, `body[]`, `date`, `footer`                   |
-| `"insert"` | `slide`, `svg`               | `title`, `subtitle`, `body[]`, `date`, `footer`, `clearContent`, `contentZone` |
-| `"expand"` | `items[]` (each needs `svg`) | `templateSlide`, `insertAfter`, `clearContent`, `contentZone`; per-item: `title`, `subtitle`, `body[]`, `date`, `footer` |
+| `"text"`   | `slide`                      | `title`, `subtitle`, `body`, `date`, `footer`, `shapeTexts[]`, `replacements[]` |
+| `"insert"` | `slide`, `svg`               | `title`, `subtitle`, `body`, `date`, `footer`, `shapeTexts[]`, `replacements[]`, `clearContent`, `contentZone` |
+| `"expand"` | `items[]` (each needs `svg`) | `templateSlide`, `insertAfter`, `clearContent`, `contentZone`; per-item: `title`, `subtitle`, `body`, `date`, `footer`, `shapeTexts[]`, `replacements[]` |
 
 ### Content-zone auto-detection
 
@@ -307,6 +331,11 @@ When `-ContentZone` (or manifest `contentZone`) is not provided:
 
 To find points manually: in PowerPoint, right-click a shape → Size and
 Position; multiply inches × 72.
+
+`-ClearContent` uses this same zone: it only deletes non-structural shapes whose
+centre point is inside the zone. This is intentional for branded templates:
+title bars, logos, footers, and decorative elements outside the zone should
+survive expansion.
 
 ### Backup behaviour
 

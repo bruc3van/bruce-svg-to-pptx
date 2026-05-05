@@ -114,14 +114,12 @@ function Get-SvgIntrinsicSize {
     }
 
     try {
-        [xml]$xml = Get-Content -LiteralPath $Path -Raw
-        $svg = $xml.svg
-        if (-not $svg) { return $fallback }
-
+        $raw = Get-Content -LiteralPath $Path -Raw
         $w = $null; $h = $null
 
-        if ($svg.viewBox) {
-            $parts = $svg.viewBox.Trim() -split '[\s,]+' | Where-Object { $_ -ne '' }
+        $m = [regex]::Match($raw, 'viewBox\s*=\s*["'']([^"'']+)["'']')
+        if ($m.Success) {
+            $parts = $m.Groups[1].Value.Trim() -split '[\s,]+' | Where-Object { $_ -ne '' }
             if ($parts.Count -eq 4) {
                 $w = [double]$parts[2]
                 $h = [double]$parts[3]
@@ -129,9 +127,11 @@ function Get-SvgIntrinsicSize {
         }
 
         if (-not $w -or -not $h) {
-            if ($svg.width -and $svg.height) {
-                $w = [double]([regex]::Match($svg.width,  '[\d.]+').Value)
-                $h = [double]([regex]::Match($svg.height, '[\d.]+').Value)
+            $mw = [regex]::Match($raw, '<svg[^>]*\swidth\s*=\s*["'']([^"'']+)["'']')
+            $mh = [regex]::Match($raw, '<svg[^>]*\sheight\s*=\s*["'']([^"'']+)["'']')
+            if ($mw.Success -and $mh.Success) {
+                $w = [double]([regex]::Match($mw.Groups[1].Value,  '[-+]?\d*\.?\d+').Value)
+                $h = [double]([regex]::Match($mh.Groups[1].Value, '[-+]?\d*\.?\d+').Value)
             }
         }
 
@@ -220,8 +220,9 @@ try {
     $slideWidth  = $pres.PageSetup.SlideWidth
     $slideHeight = $pres.PageSetup.SlideHeight
 
-    foreach ($svg in $svgFiles) {
-        Write-Host "  [$($convertedCount + 1)/$($svgFiles.Count)] $svg"
+    for ($i = 0; $i -lt $svgFiles.Count; $i++) {
+        $svg = $svgFiles[$i]
+        Write-Host "  [$($i + 1)/$($svgFiles.Count)] $svg"
 
         $size = Get-SvgIntrinsicSize -Path $svg -SlideWidth $slideWidth -SlideHeight $slideHeight
         $left = $size.Left

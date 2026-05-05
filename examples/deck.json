@@ -6,6 +6,9 @@
       "slide":    1,
       "title":    "2026 年度战略报告",
       "subtitle": "董事会汇报",
+      "shapeTexts": [
+        { "shapeName": "CoverTagline", "text": "内部讨论稿" }
+      ],
       "date":     "2026-05"
     },
     {
