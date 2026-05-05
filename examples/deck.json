@@ -1,0 +1,36 @@
+{
+  "_comment": "Example manifest for Edit-ExistingPptx.ps1 -Manifest. SVG paths are resolved relative to this file's directory.",
+  "edits": [
+    {
+      "type":     "text",
+      "slide":    1,
+      "title":    "2026 年度战略报告",
+      "subtitle": "董事会汇报",
+      "date":     "2026-05"
+    },
+    {
+      "type":  "text",
+      "slide": 2,
+      "title": "目录",
+      "body":  ["市场概述", "竞争格局", "战略规划", "执行路径"]
+    },
+    {
+      "type":          "expand",
+      "templateSlide": 3,
+      "insertAfter":   2,
+      "clearContent":  true,
+      "items": [
+        { "svg": "slides/s1.svg", "title": "第一章：市场概述" },
+        { "svg": "slides/s2.svg", "title": "第二章：竞争格局" },
+        { "svg": "slides/s3.svg", "title": "第三章：战略规划" }
+      ]
+    },
+    {
+      "type":         "insert",
+      "slide":        9,
+      "svg":          "slides/closing-chart.svg",
+      "title":        "结语",
+      "clearContent": true
+    }
+  ]
+}

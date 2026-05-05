@@ -1,132 +1,140 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Insert SVG-converted shapes into an existing PowerPoint presentation, with optional
-    slide duplication to expand the deck while preserving its branded template.
+    Edit an existing PPTX template: replace text on cover/TOC pages, and/or
+    insert SVG-derived editable shapes into content pages.
 
 .DESCRIPTION
-    Opens an existing .pptx (e.g., a corporate template with cover / TOC / content slides)
-    and operates in one of two modes:
+    Four modes of operation, picked automatically from the parameters supplied:
 
-    INSERT mode  : Inserts each SVG into one or more already-existing slides.
-                   Triggered by -TargetSlide. Multiple SVGs map to consecutive slides
-                   starting at TargetSlide.
+    TEXT mode     Edit text on existing slides only — no SVG. Use this for
+                  cover, title, and TOC slides where you only need to change
+                  wording. Triggered when -SlideTexts is provided without
+                  -SvgPath.
 
-    EXPAND mode  : Duplicates a "content template" slide once per SVG, appends the
-                   copies after a specified position, and inserts one SVG into each copy.
-                   Triggered automatically when -TargetSlide is omitted.
-                   The template slide keeps all branded furniture (title bar, footer,
-                   background, logo, etc.) intact.
+    INSERT mode   Insert each SVG into one or more already-existing slides
+                  (one SVG per slide). Triggered by -TargetSlide.
 
-    In both modes the SVG is converted to native editable shapes via PowerPoint's
-    "Convert to Shape" command (CommandBars.ExecuteMso("SVGEdit")), producing the
-    same result as right-clicking an SVG and choosing Convert to Shape.
+    EXPAND mode   Duplicate a "content template" slide once per SVG, append the
+                  copies after a chosen position, and insert one SVG into each.
+                  The duplicates keep the branded title bar / background; the
+                  SVG goes inside a safe content zone. Triggered when -SvgPath
+                  is given without -TargetSlide.
+
+    MANIFEST mode Drive a whole-deck workflow from a JSON file. Each entry in
+                  the manifest is a TEXT, INSERT, or EXPAND edit. Triggered by
+                  -Manifest. This is the recommended path for the full
+                  "edit cover + edit TOC + add N content pages" flow in a
+                  single invocation.
+
+    SVG-to-shape conversion uses PowerPoint's CommandBars.ExecuteMso("SVGEdit")
+    — the Ribbon "Convert to Shape" command — producing native editable shapes
+    identical to right-clicking an SVG and choosing Convert to Shape.
 
 .PARAMETER TemplatePath
     Path to the existing .pptx to edit. Must already exist.
 
 .PARAMETER SvgPath
-    One or more .svg file paths, or a directory of .svg files (non-recursive).
+    Optional. One or more .svg file paths or a directory of .svg files
+    (non-recursive). Omit to enter TEXT mode.
 
 .PARAMETER OutputPath
     Destination .pptx. Defaults to TemplatePath (in-place edit after backup).
-    If different from TemplatePath, the original is not modified.
+
+.PARAMETER Manifest
+    Path to a JSON file describing per-slide edits. Mutually exclusive with
+    INSERT/EXPAND/TEXT command-line modes. See "Manifest schema" below.
 
 .PARAMETER TargetSlide
-    INSERT mode. Slide index (1-based) for the first SVG. Additional SVGs go into
-    TargetSlide+1, TargetSlide+2, etc. All target slides must already exist.
-    Omit to enter EXPAND mode.
+    INSERT mode. 1-based slide index for the first SVG.
 
 .PARAMETER ContentSlide
-    EXPAND mode. Slide index (1-based) to duplicate as the content page template.
-    Defaults to the last slide in the presentation.
+    EXPAND mode. 1-based slide index to duplicate as the content template.
+    Defaults to the last slide.
 
 .PARAMETER InsertAfterSlide
-    EXPAND mode. New slides are inserted after this index.
-    Defaults to the last slide (append to end).
+    EXPAND mode. New slides are inserted after this index. Defaults to last.
 
 .PARAMETER ContentZone
-    Override the area used for SVG placement: "Left,Top,Width,Height" in PowerPoint
-    points (1 pt = 1/72 inch).
-    Example: "36,108,888,396" for a standard widescreen content area.
-    If omitted, the script auto-detects a content placeholder on the template/target
-    slide, falling back to a sensible default below the title.
+    Override the SVG placement area: "Left,Top,Width,Height" in PowerPoint
+    points. If omitted, the script auto-detects a content placeholder, falling
+    back to a sensible default below the title.
 
 .PARAMETER SlideTitles
-    Optional array of title strings, one per SVG (in the same order).
-    When provided, each duplicated or target slide's title placeholder text is
-    set to the corresponding string. Titles that are empty or $null are skipped
-    (the template title is preserved).
-    Example: -SlideTitles "市场分析","竞争格局","战略规划"
+    Backwards-compatibility shortcut. Array of strings, one per SVG, that sets
+    each new slide's title placeholder. For richer text edits (subtitle, body,
+    date, footer) use -SlideTexts or -Manifest.
+
+.PARAMETER SlideTexts
+    Hashtable for richer per-slide text edits.
+
+    Top-level keys are 1-based slide indices (or, in EXPAND/INSERT mode, 1-based
+    SVG indices — see notes). Each value is a hashtable describing what text to
+    replace, with the following recognised keys:
+
+        Title     string         first PP_TITLE / PP_CENTER_TITLE placeholder
+        Subtitle  string         first PP_SUBTITLE placeholder
+        Body      string[]       Nth PP_BODY / PP_OBJECT placeholder (in order)
+        Date      string         first PP_DATE placeholder
+        Footer    string         first PP_FOOTER placeholder
+
+    Example (TEXT mode — fixed slide indices):
+
+        -SlideTexts @{
+            1 = @{ Title = '2026 战略报告'; Subtitle = '董事会汇报' }
+            2 = @{ Title = '目录'; Body = @('市场概述','竞争格局','战略规划') }
+        }
+
+    In EXPAND or INSERT mode the indices refer to SVG order (1-based), since
+    the destination slide indices are computed by the script.
 
 .PARAMETER ClearContent
-    Before inserting the SVG, delete all shapes from the slide that are NOT title,
-    subtitle, footer, slide-number, or date placeholders. Use this when duplicating
-    a template slide that contains sample content you want replaced.
+    Before inserting SVG, delete non-structural shapes (anything that isn't a
+    title / subtitle / footer / slide-number / date placeholder).
 
 .PARAMETER NoBackup
-    Skip creating a .bak.pptx backup copy of the original TemplatePath.
+    Skip creating .bak.pptx of the original.
 
 .PARAMETER Force
-    Skip the overwrite confirmation when OutputPath already exists and differs from
-    TemplatePath.
-
-.EXAMPLE
-    # EXPAND mode: duplicate the last slide for each SVG, append after the last slide
-    .\Edit-ExistingPptx.ps1 `
-        -TemplatePath .\branded-template.pptx `
-        -SvgPath .\content-slides\ `
-        -ClearContent
-
-.EXAMPLE
-    # EXPAND mode: use slide 3 as the content template, insert after slide 4
-    .\Edit-ExistingPptx.ps1 `
-        -TemplatePath .\deck.pptx `
-        -SvgPath .\slides\ `
-        -ContentSlide 3 `
-        -InsertAfterSlide 4 `
-        -ClearContent `
-        -OutputPath .\deck-filled.pptx
-
-.EXAMPLE
-    # INSERT mode: put icon.svg into slide 5
-    .\Edit-ExistingPptx.ps1 `
-        -TemplatePath .\deck.pptx `
-        -SvgPath .\icon.svg `
-        -TargetSlide 5
-
-.EXAMPLE
-    # INSERT mode: replace content in slides 3, 4, 5 with three SVGs
-    .\Edit-ExistingPptx.ps1 `
-        -TemplatePath .\deck.pptx `
-        -SvgPath .\slide1.svg, .\slide2.svg, .\slide3.svg `
-        -TargetSlide 3 `
-        -ClearContent
-
-.EXAMPLE
-    # EXPAND mode with custom titles for each duplicated slide
-    .\Edit-ExistingPptx.ps1 `
-        -TemplatePath .\branded.pptx `
-        -SvgPath      .\slides\ `
-        -ContentSlide    3 `
-        -InsertAfterSlide 2 `
-        -ClearContent `
-        -SlideTitles "市场概述", "竞争格局", "战略规划", "执行路径"
+    Skip overwrite confirmation when OutputPath differs from TemplatePath.
 
 .NOTES
+    Manifest schema (JSON):
+
+        {
+          "edits": [
+            { "type": "text",   "slide": 1,
+              "title": "...", "subtitle": "...", "body": ["..."],
+              "date": "...", "footer": "..." },
+
+            { "type": "expand", "templateSlide": 3, "insertAfter": 2,
+              "clearContent": true,
+              "items": [
+                { "svg": "s1.svg",
+                  "title": "...", "subtitle": "...", "body": ["..."] }
+              ] },
+
+            { "type": "insert", "slide": 5, "svg": "chart.svg",
+              "clearContent": true,
+              "title": "..." }
+          ]
+        }
+
+    SVG paths inside the manifest are resolved relative to the manifest file's
+    directory.
+
     Requires Windows + Microsoft PowerPoint 2016 build 1712 or later.
-    PowerPoint window is shown during conversion (required by ExecuteMso) and
-    closed automatically on completion or error.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
     [string]$TemplatePath,
 
-    [Parameter(Mandatory)]
     [string[]]$SvgPath,
 
     [string]$OutputPath,
+
+    [string]$Manifest,
 
     # INSERT mode
     [int]$TargetSlide      = 0,
@@ -138,6 +146,8 @@ param(
     [string]$ContentZone,
 
     [string[]]$SlideTitles,
+
+    [hashtable]$SlideTexts,
 
     [switch]$ClearContent,
     [switch]$NoBackup,
@@ -154,17 +164,17 @@ $msoTrue                     = -1
 $msoGraphic                  = 28
 $ppSaveAsOpenXMLPresentation = 24
 
-# Placeholder type IDs
+# Placeholder type IDs (PpPlaceholderType)
 $PP_TITLE          = 1
 $PP_BODY           = 2
 $PP_CENTER_TITLE   = 3
 $PP_SUBTITLE       = 4
-$PP_VERT_BODY      = 5
-$PP_VERT_TITLE     = 6
-$PP_DATE           = 10
-$PP_FOOTER         = 11
-$PP_SLIDE_NUMBER   = 12
-$PP_OBJECT         = 14
+$PP_VERT_TITLE     = 5
+$PP_VERT_BODY      = 6
+$PP_DATE           = 16
+$PP_FOOTER         = 15
+$PP_SLIDE_NUMBER   = 13
+$PP_OBJECT         = 7
 
 # Types that stay when -ClearContent is used (structural chrome)
 $KEEPER_TYPES = @($PP_TITLE, $PP_CENTER_TITLE, $PP_SUBTITLE,
@@ -172,7 +182,7 @@ $KEEPER_TYPES = @($PP_TITLE, $PP_CENTER_TITLE, $PP_SUBTITLE,
                   $PP_DATE, $PP_FOOTER, $PP_SLIDE_NUMBER)
 
 # Types considered "content zone" for auto-detection
-$CONTENT_PH_TYPES = @($PP_BODY, $PP_OBJECT, 15, 16, 17, 18, 19)
+$CONTENT_PH_TYPES = @($PP_BODY, $PP_OBJECT, 8, 9, 10, 11, 12)
 
 # ──────────────────────────────────────────────────────────────
 # Helper: enumerate .svg files from path list
@@ -208,7 +218,6 @@ function Get-ContentZone {
         [double]$SlideHeight
     )
 
-    # 1. Explicit override
     if (-not [string]::IsNullOrWhiteSpace($Override)) {
         $parts = $Override -split ',' | ForEach-Object { $_.Trim() }
         if ($parts.Count -ne 4) { throw "-ContentZone must be 'Left,Top,Width,Height' in points." }
@@ -220,7 +229,6 @@ function Get-ContentZone {
         }
     }
 
-    # 2. Auto-detect from content placeholder (body, object, chart, picture, etc.)
     foreach ($shape in $Slide.Shapes) {
         try {
             $phType = $shape.PlaceholderFormat.Type
@@ -235,8 +243,7 @@ function Get-ContentZone {
         } catch { }
     }
 
-    # 3. Default: full-width content area below a typical title bar
-    #    0.5" (36pt) side margins, 1.2" (86.4pt) title height, 0.3" (21.6pt) gap
+    # Default: full-width content area below a typical title bar
     $hMargin = 36.0
     $titleH  = 86.4
     $gap     = 21.6
@@ -269,20 +276,24 @@ function Get-SvgFit {
     }
 
     try {
-        [xml]$xml = Get-Content -LiteralPath $Path -Raw
-        $svg = $xml.svg
-        if (-not $svg) { return $fallback }
-
+        $raw = Get-Content -LiteralPath $Path -Raw
         $w = $null; $h = $null
 
-        if ($svg.viewBox) {
-            $parts = $svg.viewBox.Trim() -split '[\s,]+' | Where-Object { $_ -ne '' }
-            if ($parts.Count -eq 4) { $w = [double]$parts[2]; $h = [double]$parts[3] }
+        # Prefer viewBox via regex (handles namespaced <svg:svg> and odd whitespace)
+        $m = [regex]::Match($raw, 'viewBox\s*=\s*"([^"]+)"')
+        if ($m.Success) {
+            $parts = $m.Groups[1].Value.Trim() -split '[\s,]+' | Where-Object { $_ -ne '' }
+            if ($parts.Count -eq 4) {
+                $w = [double]$parts[2]
+                $h = [double]$parts[3]
+            }
         }
         if ((-not $w) -or (-not $h)) {
-            if ($svg.width -and $svg.height) {
-                $w = [double]([regex]::Match($svg.width,  '[\d.]+').Value)
-                $h = [double]([regex]::Match($svg.height, '[\d.]+').Value)
+            $mw = [regex]::Match($raw, '<svg[^>]*\swidth\s*=\s*"([^"]+)"')
+            $mh = [regex]::Match($raw, '<svg[^>]*\sheight\s*=\s*"([^"]+)"')
+            if ($mw.Success -and $mh.Success) {
+                $w = [double]([regex]::Match($mw.Groups[1].Value, '[\d.]+').Value)
+                $h = [double]([regex]::Match($mh.Groups[1].Value, '[\d.]+').Value)
             }
         }
         if ((-not $w) -or (-not $h) -or $w -le 0 -or $h -le 0) { return $fallback }
@@ -306,7 +317,6 @@ function Get-SvgFit {
 # ──────────────────────────────────────────────────────────────
 function Clear-SlideContent {
     param($Slide)
-    # Iterate backwards so deletion doesn't shift indices
     for ($i = $Slide.Shapes.Count; $i -ge 1; $i--) {
         $shape = $Slide.Shapes.Item($i)
         $keep  = $false
@@ -321,21 +331,141 @@ function Clear-SlideContent {
 }
 
 # ──────────────────────────────────────────────────────────────
-# Helper: set the title placeholder text on a slide
+# Helper: write text into a placeholder, preserving format inheritance
 # ──────────────────────────────────────────────────────────────
-function Set-SlideTitle {
-    param($Slide, [string]$Title)
-    $titleTypes = @($PP_TITLE, $PP_CENTER_TITLE)
+function Set-PhText {
+    param($Shape, [string]$Text, [string]$Label)
+    if ($null -eq $Shape) {
+        Write-Warning "    No $Label placeholder; '$Text' skipped."
+        return
+    }
+    try {
+        if ($Shape.HasTextFrame -ne $msoTrue) {
+            Write-Warning "    $Label placeholder has no text frame; skipped."
+            return
+        }
+        $Shape.TextFrame.TextRange.Text = $Text
+    } catch {
+        Write-Warning "    Failed to set $Label text: $($_.Exception.Message)"
+    }
+}
+
+# ──────────────────────────────────────────────────────────────
+# Helper: apply a -SlideTexts hashtable entry to a slide
+#   Entry shape: @{ Title=..; Subtitle=..; Body=@(..); Date=..; Footer=.. }
+# ──────────────────────────────────────────────────────────────
+function Set-SlideTexts {
+    param($Slide, $Texts)
+
+    if (-not $Texts) { return }
+
+    $titleTypes = @($PP_TITLE, $PP_CENTER_TITLE, $PP_VERT_TITLE)
+    $bodyTypes  = @($PP_BODY,  $PP_OBJECT,      $PP_VERT_BODY)
+
+    $titlePh    = $null
+    $subtitlePh = $null
+    $bodyPhs    = New-Object System.Collections.Generic.List[object]
+    $datePh     = $null
+    $footerPh   = $null
+
     foreach ($shape in $Slide.Shapes) {
         try {
             $phType = $shape.PlaceholderFormat.Type
-            if ($titleTypes -contains $phType) {
-                $shape.TextFrame.TextRange.Text = $Title
-                return
-            }
-        } catch { }
+        } catch { continue }
+        if ($titleTypes -contains $phType) {
+            if (-not $titlePh) { $titlePh = $shape }
+            else { $bodyPhs.Add($shape) }   # extra title-like shapes treated as body fallbacks
+            continue
+        }
+        if ($phType -eq $PP_SUBTITLE -and -not $subtitlePh) { $subtitlePh = $shape; continue }
+        if ($bodyTypes -contains $phType)                    { $bodyPhs.Add($shape); continue }
+        if ($phType -eq $PP_DATE   -and -not $datePh)        { $datePh   = $shape; continue }
+        if ($phType -eq $PP_FOOTER -and -not $footerPh)      { $footerPh = $shape; continue }
     }
-    Write-Warning "    No title placeholder found on this slide; title '$Title' was not applied."
+
+    # Hashtable accessor that works for both PS hashtable and PSCustomObject (from JSON)
+    $get = {
+        param($obj, [string]$key)
+        if ($null -eq $obj) { return $null }
+        if ($obj -is [hashtable]) {
+            foreach ($k in $obj.Keys) { if ([string]$k -ieq $key) { return $obj[$k] } }
+            return $null
+        }
+        $prop = $obj.PSObject.Properties | Where-Object { $_.Name -ieq $key } | Select-Object -First 1
+        if ($prop) { return $prop.Value }
+        return $null
+    }
+
+    $title    = & $get $Texts 'Title'
+    $subtitle = & $get $Texts 'Subtitle'
+    $body     = & $get $Texts 'Body'
+    $date     = & $get $Texts 'Date'
+    $footer   = & $get $Texts 'Footer'
+
+    if ($null -ne $title    -and "$title"    -ne '') { Set-PhText -Shape $titlePh    -Text "$title"    -Label 'Title' }
+    if ($null -ne $subtitle -and "$subtitle" -ne '') { Set-PhText -Shape $subtitlePh -Text "$subtitle" -Label 'Subtitle' }
+    if ($null -ne $date     -and "$date"     -ne '') { Set-PhText -Shape $datePh     -Text "$date"     -Label 'Date' }
+    if ($null -ne $footer   -and "$footer"   -ne '') { Set-PhText -Shape $footerPh   -Text "$footer"   -Label 'Footer' }
+
+    if ($null -ne $body) {
+        $arr = @($body)
+        for ($j = 0; $j -lt $arr.Count; $j++) {
+            $val = "$($arr[$j])"
+            if ($val -eq '') { continue }
+            if ($j -lt $bodyPhs.Count) {
+                Set-PhText -Shape $bodyPhs[$j] -Text $val -Label "Body[$j]"
+            } else {
+                Write-Warning "    No body placeholder #$j on this slide; '$val' skipped."
+            }
+        }
+    }
+}
+
+# ──────────────────────────────────────────────────────────────
+# Helper: insert one SVG into a slide and convert to shapes
+# ──────────────────────────────────────────────────────────────
+function Insert-SvgIntoSlide {
+    param(
+        $PptApp,
+        $Slide,
+        [string]$SvgFile,
+        $Zone
+    )
+
+    $fit = Get-SvgFit `
+        -Path       $SvgFile `
+        -ZoneLeft   $Zone.Left `
+        -ZoneTop    $Zone.Top `
+        -ZoneWidth  $Zone.Width `
+        -ZoneHeight $Zone.Height
+
+    $shape = $null
+    try {
+        $shape = $Slide.Shapes.AddPicture(
+            $SvgFile, $msoFalse, $msoTrue,
+            $fit.Left, $fit.Top, $fit.Width, $fit.Height
+        )
+    } catch {
+        Write-Warning "    AddPicture failed: $($_.Exception.Message)"
+        return $false
+    }
+
+    if ($shape.Type -ne $msoGraphic) {
+        Write-Warning ("    Inserted as Type={0}, expected msoGraphic ({1}). Conversion skipped." `
+                       -f $shape.Type, $msoGraphic)
+        return $false
+    }
+
+    try {
+        $Slide.Select()
+        $shape.Select()
+        Start-Sleep -Milliseconds 300
+        $PptApp.CommandBars.ExecuteMso('SVGEdit')
+        return $true
+    } catch {
+        Write-Warning "    ExecuteMso('SVGEdit') failed: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -349,12 +479,9 @@ function Release-Com {
 }
 
 # ══════════════════════════════════════════════════════════════
-# Pre-flight
+# Pre-flight: validate paths, decide mode
 # ══════════════════════════════════════════════════════════════
 
-$svgFiles = Resolve-SvgFiles -Inputs $SvgPath
-
-# Resolve TemplatePath to absolute
 if (-not (Test-Path -LiteralPath $TemplatePath)) {
     throw "TemplatePath not found: $TemplatePath"
 }
@@ -363,7 +490,39 @@ if ([IO.Path]::GetExtension($templateAbs) -ine '.pptx') {
     throw "TemplatePath must be a .pptx file (got: $templateAbs)"
 }
 
-# Resolve OutputPath to absolute (default = TemplatePath = in-place edit)
+# Decide top-level mode
+$manifestData = $null
+$manifestDir  = $null
+if ($Manifest) {
+    if (-not (Test-Path -LiteralPath $Manifest)) { throw "Manifest not found: $Manifest" }
+    $manifestAbs  = (Resolve-Path -LiteralPath $Manifest).Path
+    $manifestDir  = Split-Path -Parent $manifestAbs
+    try {
+        $manifestData = Get-Content -LiteralPath $manifestAbs -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        throw "Failed to parse manifest JSON: $($_.Exception.Message)"
+    }
+    if (-not $manifestData.edits) { throw "Manifest has no 'edits' array." }
+}
+
+$svgFiles = @()
+if (-not $Manifest -and $SvgPath) {
+    $svgFiles = Resolve-SvgFiles -Inputs $SvgPath
+}
+
+# Mode resolution (only one of these is true)
+$mode = $null
+if ($Manifest) {
+    $mode = 'MANIFEST'
+} elseif ($svgFiles.Count -gt 0) {
+    $mode = if ($TargetSlide -gt 0) { 'INSERT' } else { 'EXPAND' }
+} elseif ($SlideTexts) {
+    $mode = 'TEXT'
+} else {
+    throw "Nothing to do. Provide -Manifest, -SvgPath, or -SlideTexts."
+}
+
+# Resolve OutputPath (default = TemplatePath = in-place edit)
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = $templateAbs
 }
@@ -377,14 +536,12 @@ if ([IO.Path]::GetExtension($OutputPath) -ine '.pptx') {
     throw "OutputPath must end in .pptx (got: $OutputPath)"
 }
 
-# Overwrite confirmation (only when output differs from template and already exists)
 $outputIsSameAsTemplate = ($OutputPath -ieq $templateAbs)
 if (-not $outputIsSameAsTemplate -and (Test-Path -LiteralPath $OutputPath) -and -not $Force) {
     $resp = Read-Host "Overwrite existing $OutputPath? [y/N]"
     if ($resp -notmatch '^[Yy]') { Write-Host "Aborted."; return }
 }
 
-# Backup the original template (always, unless -NoBackup)
 if (-not $NoBackup) {
     $bakPath = [IO.Path]::ChangeExtension($templateAbs, '.bak.pptx')
     Copy-Item -LiteralPath $templateAbs -Destination $bakPath -Force
@@ -407,169 +564,244 @@ if ($ppt.Presentations.Count -gt 0) {
     Write-Warning "PowerPoint has $($ppt.Presentations.Count) open presentation(s). Close them for reliable results."
 }
 
-$pres           = $null
-$convertedCount = 0
-$failedItems    = @()
+$pres            = $null
+$convertedCount  = 0
+$svgAttempted    = 0
+$failedItems     = @()
+$textEditCount   = 0
 
 try {
-    # Open template (ReadOnly=$false so we can save back to it; AddToMRU=$false)
     $pres = $ppt.Presentations.Open($templateAbs, $msoFalse, $msoFalse, $msoTrue)
-
     $slideWidth  = $pres.PageSetup.SlideWidth
     $slideHeight = $pres.PageSetup.SlideHeight
-    $totalSlides = $pres.Slides.Count
+    Write-Host ("Opened: {0}  ({1} slides, {2}x{3} pts)" -f $templateAbs, $pres.Slides.Count, $slideWidth, $slideHeight)
+    Write-Host "Mode: $mode"
 
-    Write-Host "Opened: $templateAbs  ($totalSlides slides, ${slideWidth}x${slideHeight} pts)"
+    switch ($mode) {
 
-    # ──────────────────────────────────────────────────────────
-    # Determine mode and validate parameters
-    # ──────────────────────────────────────────────────────────
-    $expandMode = ($TargetSlide -eq 0)
-
-    if ($expandMode) {
-        # EXPAND mode: resolve content template index
-        $templateIdx = if ($ContentSlide -gt 0) { $ContentSlide } else { $totalSlides }
-        if ($templateIdx -lt 1 -or $templateIdx -gt $totalSlides) {
-            throw "ContentSlide $templateIdx is out of range (presentation has $totalSlides slides)."
-        }
-
-        # Resolve base insert-after index
-        $baseInsertAfter = if ($InsertAfterSlide -gt 0) { $InsertAfterSlide } else { $totalSlides }
-        if ($baseInsertAfter -lt 0 -or $baseInsertAfter -gt $totalSlides) {
-            throw "InsertAfterSlide $baseInsertAfter is out of range."
-        }
-
-        Write-Host "Mode: EXPAND  ContentSlide=$templateIdx  InsertAfter=$baseInsertAfter"
-        Write-Host "Note: title placeholders on duplicated slides keep the template's title text." `
-                   "Update slide titles manually in PowerPoint after generation."
-    } else {
-        # INSERT mode: check that all target slides exist
-        $lastTargetSlide = $TargetSlide + $svgFiles.Count - 1
-        if ($TargetSlide -lt 1 -or $lastTargetSlide -gt $totalSlides) {
-            throw "INSERT mode requires slides $TargetSlide–$lastTargetSlide to exist (presentation has $totalSlides slides)."
-        }
-        Write-Host "Mode: INSERT  Slides $TargetSlide–$lastTargetSlide"
-    }
-
-    # ──────────────────────────────────────────────────────────
-    # Auto-detect (or parse) the content zone from the reference slide
-    # ──────────────────────────────────────────────────────────
-    $refSlideIdx = if ($expandMode) { $templateIdx } else { $TargetSlide }
-    $zone = Get-ContentZone `
-        -Slide    $pres.Slides.Item($refSlideIdx) `
-        -Override $ContentZone `
-        -SlideWidth  $slideWidth `
-        -SlideHeight $slideHeight
-
-    Write-Host ("Content zone: L={0:F1}  T={1:F1}  W={2:F1}  H={3:F1} pts" -f `
-        $zone.Left, $zone.Top, $zone.Width, $zone.Height)
-
-    # ──────────────────────────────────────────────────────────
-    # Process each SVG
-    # ──────────────────────────────────────────────────────────
-    for ($i = 0; $i -lt $svgFiles.Count; $i++) {
-        $svg = $svgFiles[$i]
-        Write-Host ("  [{0}/{1}] {2}" -f ($i + 1), $svgFiles.Count, $svg)
-
-        $workSlide = $null
-
-        if ($expandMode) {
-            # ── Duplicate the content template slide ──────────
-            # Duplicate() officially returns SlideRange; .Item(1) retrieves the Slide.
-            # A small number of builds return the Slide object directly — handle both.
-            $duped    = $pres.Slides.Item($templateIdx).Duplicate()
-            $newSlide = $null
-            try   { $newSlide = $duped.Item(1) }
-            catch { $newSlide = $duped }
-
-            # Target position in the final deck (0-based offset from baseInsertAfter)
-            $targetPos = $baseInsertAfter + $i + 1
-
-            # Move the duplicate from its temporary position to targetPos.
-            # If targetPos is before or at templateIdx the template will shift right.
-            $newSlide.MoveTo($targetPos)
-            if ($targetPos -le $templateIdx) { $templateIdx++ }
-
-            # Re-fetch by index (safer than holding stale reference after MoveTo)
-            $workSlide = $pres.Slides.Item($targetPos)
-
-        } else {
-            # ── Use the existing slide ────────────────────────
-            $workSlide = $pres.Slides.Item($TargetSlide + $i)
-        }
-
-        # ── Optionally strip content before inserting ─────────
-        if ($ClearContent) {
-            Clear-SlideContent -Slide $workSlide
-        }
-
-        # ── Optionally set slide title ─────────────────────────
-        if ($SlideTitles -and $i -lt $SlideTitles.Count) {
-            $titleText = $SlideTitles[$i]
-            if (-not [string]::IsNullOrWhiteSpace($titleText)) {
-                Set-SlideTitle -Slide $workSlide -Title $titleText
+        # ──────────────────────────────────────────────────────
+        'TEXT' {
+            foreach ($key in $SlideTexts.Keys) {
+                $idx = [int]$key
+                if ($idx -lt 1 -or $idx -gt $pres.Slides.Count) {
+                    Write-Warning "  Slide $idx out of range (1..$($pres.Slides.Count)); skipped."
+                    continue
+                }
+                Write-Host "  Editing slide $idx text…"
+                Set-SlideTexts -Slide $pres.Slides.Item($idx) -Texts $SlideTexts[$key]
+                $textEditCount++
             }
         }
 
-        # ── Scale SVG to fit inside the content zone ─────────
-        $fit = Get-SvgFit `
-            -Path      $svg `
-            -ZoneLeft  $zone.Left `
-            -ZoneTop   $zone.Top `
-            -ZoneWidth $zone.Width `
-            -ZoneHeight $zone.Height
+        # ──────────────────────────────────────────────────────
+        'INSERT' {
+            $svgAttempted = $svgFiles.Count
+            $lastTargetSlide = $TargetSlide + $svgFiles.Count - 1
+            if ($TargetSlide -lt 1 -or $lastTargetSlide -gt $pres.Slides.Count) {
+                throw "INSERT mode requires slides $TargetSlide–$lastTargetSlide to exist."
+            }
 
-        # ── Insert SVG as an embedded picture ─────────────────
-        $shape = $null
-        try {
-            $shape = $workSlide.Shapes.AddPicture(
-                $svg,
-                $msoFalse,   # LinkToFile  = false
-                $msoTrue,    # SaveWithDocument = true
-                $fit.Left,
-                $fit.Top,
-                $fit.Width,
-                $fit.Height
-            )
-        } catch {
-            Write-Warning "    AddPicture failed: $($_.Exception.Message)"
-            $failedItems += $svg
-            continue
+            $zone = Get-ContentZone -Slide $pres.Slides.Item($TargetSlide) -Override $ContentZone `
+                                    -SlideWidth $slideWidth -SlideHeight $slideHeight
+            Write-Host ("Content zone: L={0:F1} T={1:F1} W={2:F1} H={3:F1}" -f $zone.Left,$zone.Top,$zone.Width,$zone.Height)
+
+            for ($i = 0; $i -lt $svgFiles.Count; $i++) {
+                $svg = $svgFiles[$i]
+                Write-Host ("  [{0}/{1}] {2}" -f ($i+1), $svgFiles.Count, $svg)
+                $workSlide = $pres.Slides.Item($TargetSlide + $i)
+
+                if ($ClearContent) { Clear-SlideContent -Slide $workSlide }
+
+                # Apply per-SVG texts (1-based key by SVG order) or legacy -SlideTitles
+                $perSlide = $null
+                if ($SlideTexts -and $SlideTexts.ContainsKey($i + 1)) {
+                    $perSlide = $SlideTexts[$i + 1]
+                } elseif ($SlideTitles -and $i -lt $SlideTitles.Count -and $SlideTitles[$i]) {
+                    $perSlide = @{ Title = $SlideTitles[$i] }
+                }
+                if ($perSlide) { Set-SlideTexts -Slide $workSlide -Texts $perSlide }
+
+                if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svg -Zone $zone) {
+                    $convertedCount++
+                } else {
+                    $failedItems += $svg
+                }
+            }
         }
 
-        # Verify PowerPoint recognised it as SVG (msoGraphic)
-        if ($shape.Type -ne $msoGraphic) {
-            Write-Warning ("    Inserted as Type={0}, expected msoGraphic ({1}). " +
-                           "Conversion skipped (possibly not a valid SVG)." -f $shape.Type, $msoGraphic)
-            $failedItems += $svg
-            continue
+        # ──────────────────────────────────────────────────────
+        'EXPAND' {
+            $svgAttempted = $svgFiles.Count
+            $totalSlides  = $pres.Slides.Count
+            $templateIdx  = if ($ContentSlide     -gt 0) { $ContentSlide     } else { $totalSlides }
+            $baseInsAfter = if ($InsertAfterSlide -gt 0) { $InsertAfterSlide } else { $totalSlides }
+            if ($templateIdx -lt 1 -or $templateIdx -gt $totalSlides) {
+                throw "ContentSlide $templateIdx out of range (1..$totalSlides)."
+            }
+            if ($baseInsAfter -lt 0 -or $baseInsAfter -gt $totalSlides) {
+                throw "InsertAfterSlide $baseInsAfter out of range."
+            }
+
+            $zone = Get-ContentZone -Slide $pres.Slides.Item($templateIdx) -Override $ContentZone `
+                                    -SlideWidth $slideWidth -SlideHeight $slideHeight
+            Write-Host ("Content zone: L={0:F1} T={1:F1} W={2:F1} H={3:F1}" -f $zone.Left,$zone.Top,$zone.Width,$zone.Height)
+            Write-Host "  ContentSlide=$templateIdx  InsertAfter=$baseInsAfter"
+
+            for ($i = 0; $i -lt $svgFiles.Count; $i++) {
+                $svg = $svgFiles[$i]
+                Write-Host ("  [{0}/{1}] {2}" -f ($i+1), $svgFiles.Count, $svg)
+
+                $duped = $pres.Slides.Item($templateIdx).Duplicate()
+                $newSlide = $null
+                try   { $newSlide = $duped.Item(1) } catch { $newSlide = $duped }
+
+                $targetPos = $baseInsAfter + $i + 1
+                $newSlide.MoveTo($targetPos)
+                if ($targetPos -le $templateIdx) { $templateIdx++ }
+
+                $workSlide = $pres.Slides.Item($targetPos)
+                if ($ClearContent) { Clear-SlideContent -Slide $workSlide }
+
+                $perSlide = $null
+                if ($SlideTexts -and $SlideTexts.ContainsKey($i + 1)) {
+                    $perSlide = $SlideTexts[$i + 1]
+                } elseif ($SlideTitles -and $i -lt $SlideTitles.Count -and $SlideTitles[$i]) {
+                    $perSlide = @{ Title = $SlideTitles[$i] }
+                }
+                if ($perSlide) { Set-SlideTexts -Slide $workSlide -Texts $perSlide }
+
+                if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svg -Zone $zone) {
+                    $convertedCount++
+                } else {
+                    $failedItems += $svg
+                }
+            }
         }
 
-        # ── Execute "Convert to Shape" ─────────────────────────
-        try {
-            $workSlide.Select()
-            $shape.Select()
-            # Brief pause for PowerPoint's selection state to settle.
-            # On slow machines increase this to 500 ms if conversions silently fail.
-            Start-Sleep -Milliseconds 300
-            $ppt.CommandBars.ExecuteMso('SVGEdit')
-            $convertedCount++
-        } catch {
-            Write-Warning "    ExecuteMso('SVGEdit') failed: $($_.Exception.Message)"
-            $failedItems += $svg
+        # ──────────────────────────────────────────────────────
+        'MANIFEST' {
+            foreach ($edit in $manifestData.edits) {
+                $type = "$($edit.type)".ToLowerInvariant()
+                switch ($type) {
+
+                    'text' {
+                        $idx = [int]$edit.slide
+                        if ($idx -lt 1 -or $idx -gt $pres.Slides.Count) {
+                            Write-Warning "  [manifest:text] slide $idx out of range; skipped."
+                            continue
+                        }
+                        Write-Host "  [text] slide $idx"
+                        Set-SlideTexts -Slide $pres.Slides.Item($idx) -Texts $edit
+                        $textEditCount++
+                    }
+
+                    'insert' {
+                        $idx = [int]$edit.slide
+                        if ($idx -lt 1 -or $idx -gt $pres.Slides.Count) {
+                            Write-Warning "  [manifest:insert] slide $idx out of range; skipped."
+                            continue
+                        }
+                        if (-not $edit.svg) {
+                            Write-Warning "  [manifest:insert] missing 'svg'; skipped."
+                            continue
+                        }
+                        $svgFile = $edit.svg
+                        if (-not [IO.Path]::IsPathRooted($svgFile)) {
+                            $svgFile = Join-Path $manifestDir $svgFile
+                        }
+                        if (-not (Test-Path -LiteralPath $svgFile)) {
+                            Write-Warning "  [manifest:insert] svg not found: $svgFile; skipped."
+                            $failedItems += $svgFile
+                            continue
+                        }
+                        Write-Host "  [insert] slide $idx  $svgFile"
+                        $svgAttempted++
+                        $workSlide = $pres.Slides.Item($idx)
+
+                        $zoneOverride = $null
+                        if ($edit.contentZone) { $zoneOverride = "$($edit.contentZone)" }
+                        $zone = Get-ContentZone -Slide $workSlide -Override $zoneOverride `
+                                                -SlideWidth $slideWidth -SlideHeight $slideHeight
+
+                        if ($edit.clearContent) { Clear-SlideContent -Slide $workSlide }
+                        Set-SlideTexts -Slide $workSlide -Texts $edit
+
+                        if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svgFile -Zone $zone) {
+                            $convertedCount++
+                        } else {
+                            $failedItems += $svgFile
+                        }
+                    }
+
+                    'expand' {
+                        if (-not $edit.items -or $edit.items.Count -eq 0) {
+                            Write-Warning "  [manifest:expand] empty 'items'; skipped."
+                            continue
+                        }
+                        $totalSlides  = $pres.Slides.Count
+                        $tplIdx       = if ($edit.templateSlide) { [int]$edit.templateSlide } else { $totalSlides }
+                        $baseInsAfter = if ($edit.insertAfter)   { [int]$edit.insertAfter   } else { $totalSlides }
+                        if ($tplIdx -lt 1 -or $tplIdx -gt $totalSlides) {
+                            Write-Warning "  [manifest:expand] templateSlide $tplIdx out of range; skipped."
+                            continue
+                        }
+
+                        $zoneOverride = $null
+                        if ($edit.contentZone) { $zoneOverride = "$($edit.contentZone)" }
+                        $zone = Get-ContentZone -Slide $pres.Slides.Item($tplIdx) -Override $zoneOverride `
+                                                -SlideWidth $slideWidth -SlideHeight $slideHeight
+                        Write-Host ("  [expand] templateSlide={0} insertAfter={1} count={2}" -f $tplIdx,$baseInsAfter,$edit.items.Count)
+
+                        for ($i = 0; $i -lt $edit.items.Count; $i++) {
+                            $item   = $edit.items[$i]
+                            $svgRel = $item.svg
+                            if (-not $svgRel) {
+                                Write-Warning "    item $i missing 'svg'; skipped."
+                                continue
+                            }
+                            $svgFile = $svgRel
+                            if (-not [IO.Path]::IsPathRooted($svgFile)) {
+                                $svgFile = Join-Path $manifestDir $svgFile
+                            }
+                            if (-not (Test-Path -LiteralPath $svgFile)) {
+                                Write-Warning "    svg not found: $svgFile; skipped."
+                                $failedItems += $svgFile
+                                continue
+                            }
+                            $svgAttempted++
+                            Write-Host ("    [{0}/{1}] {2}" -f ($i+1), $edit.items.Count, $svgFile)
+
+                            $duped    = $pres.Slides.Item($tplIdx).Duplicate()
+                            $newSlide = $null
+                            try   { $newSlide = $duped.Item(1) } catch { $newSlide = $duped }
+
+                            $targetPos = $baseInsAfter + $i + 1
+                            $newSlide.MoveTo($targetPos)
+                            if ($targetPos -le $tplIdx) { $tplIdx++ }
+
+                            $workSlide = $pres.Slides.Item($targetPos)
+                            if ($edit.clearContent) { Clear-SlideContent -Slide $workSlide }
+                            Set-SlideTexts -Slide $workSlide -Texts $item
+
+                            if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svgFile -Zone $zone) {
+                                $convertedCount++
+                            } else {
+                                $failedItems += $svgFile
+                            }
+                        }
+                    }
+
+                    default {
+                        Write-Warning "  [manifest] unknown edit type '$type'; skipped."
+                    }
+                }
+            }
         }
     }
 
-    # ──────────────────────────────────────────────────────────
-    # Save
-    # ──────────────────────────────────────────────────────────
     Write-Host "Saving to $OutputPath..."
-    if ($outputIsSameAsTemplate) {
-        # In-place edit: use Save() to overwrite the already-open file path.
-        $pres.Save()
-    } else {
-        $pres.SaveAs($OutputPath, $ppSaveAsOpenXMLPresentation)
-    }
+    if ($outputIsSameAsTemplate) { $pres.Save() }
+    else                          { $pres.SaveAs($OutputPath, $ppSaveAsOpenXMLPresentation) }
     $pres.Close()
 
 } finally {
@@ -584,7 +816,12 @@ try {
 # Summary
 # ══════════════════════════════════════════════════════════════
 Write-Host ""
-Write-Host "Done. Converted $convertedCount of $($svgFiles.Count) SVG(s) → $OutputPath"
+if ($mode -eq 'TEXT') {
+    Write-Host "Done. Edited text on $textEditCount slide(s) → $OutputPath"
+} else {
+    Write-Host ("Done. Converted {0} of {1} SVG(s); text edits on {2} slide(s) → {3}" `
+                -f $convertedCount, $svgAttempted, $textEditCount, $OutputPath)
+}
 
 if ($failedItems.Count -gt 0) {
     Write-Host "Failed ($($failedItems.Count)):"
