@@ -1,85 +1,293 @@
 ---
 name: bruce-svg-to-pptx
-description: Convert SVG files into native, editable PowerPoint shapes (DrawingML) on Windows by automating PowerPoint via COM. Use this skill whenever the user wants to turn one or more .svg files into a .pptx where each SVG is broken into editable shapes (the same result as right-clicking an inserted SVG and choosing "Convert to Shape"), or asks to batch-convert SVGs into editable PowerPoint graphics, or mentions "SVG → 形状", "SVG 转 PPT 可编辑形状", or similar. Trigger this even when the user only describes the goal ("I want my SVG icons to be editable inside the deck") without naming the conversion explicitly. Requires Windows with Microsoft PowerPoint 2016 build 1712 or later.
+description: Use when the user wants to convert SVG files into native editable PowerPoint shapes on Windows, or wants to insert SVG-based content into an existing branded PPTX template (preserving cover/TOC/layout slides while adding or replacing content pages). Triggers include "SVG → 形状", "SVG 转 PPT 可编辑形状", "插入到现有 PPT", "基于模板生成", batch-converting SVG icons, expanding a deck with more content pages, or any request to make SVG content editable inside PowerPoint. Windows only.
 ---
 
 # SVG to editable PowerPoint shapes (Windows)
 
 ## What this skill does
 
-Drives Microsoft PowerPoint on Windows via COM to perform the same operation a user would do manually:
+Drives Microsoft PowerPoint on Windows via COM to perform the same operation a
+user would do manually:
 
-1. Insert each SVG onto a blank slide as a `msoGraphic` shape.
-2. Select that graphic and invoke `CommandBars.ExecuteMso("SVGEdit")` — PowerPoint's internal "Convert to Shape" command. There is no first-class VBA method for this conversion; the Mso command is the only programmatic hook Microsoft exposes.
-3. Save the deck. The result is identical to the manual right-click flow: each SVG becomes a group of native DrawingML shapes that can be ungrouped, recolored, animated, and edited individually.
+1. Insert each SVG onto a slide as a `msoGraphic` shape.
+2. Select it and call `CommandBars.ExecuteMso("SVGEdit")` — PowerPoint's
+   internal "Convert to Shape" Ribbon command. There is no first-class VBA
+   method; this Mso command is the only programmatic hook Microsoft exposes.
+3. Save the deck. The result is identical to right-click → Convert to Shape:
+   each SVG becomes a group of native DrawingML shapes that can be ungrouped,
+   recoloured, animated, and edited individually.
 
-The conversion runs inside PowerPoint's own engine, so fidelity matches what the user would see manually — including PowerPoint's known limitations with complex filters, masks, and certain gradient types.
+The skill ships **two scripts**:
 
-## When to use this skill
+| Script | Purpose |
+|---|---|
+| `scripts/Convert-SvgToShapes.ps1` | Create a **new** .pptx from one or more SVGs |
+| `scripts/Edit-ExistingPptx.ps1` | Insert SVGs into an **existing** branded template |
 
-Use this skill when the user asks to convert SVG(s) into editable PowerPoint shapes, batch-convert a folder of icons, or build a deck where SVG content needs to be edited inside PowerPoint after the fact. **Do not** use this skill for:
+## When to use which script
 
-- Embedding SVG as a static picture (just use `python-pptx` or insert manually).
-- Cross-platform (macOS/Linux) workflows — this skill requires Windows COM. Suggest the pure-DrawingML route (`svg2pptx` library or similar) instead.
+```
+User wants a brand-new deck from SVGs?
+  → Convert-SvgToShapes.ps1
+
+User has a branded template (cover / TOC / content slides) and wants to
+fill it with SVG content, or expand it with more content pages?
+  → Edit-ExistingPptx.ps1
+```
 
 ## Prerequisites
 
-- Windows 10/11.
-- Microsoft PowerPoint, version 2016 build 1712 or later (any current Microsoft 365 / Office 2019 / Office 2021 / Office 2024 install qualifies).
-- PowerShell 5.1+ (ships with Windows) or PowerShell 7.
+- Windows 10 / 11
+- Microsoft PowerPoint 2016 build 1712 or later (any current Microsoft 365 /
+  Office 2019 / 2021 / 2024 install qualifies)
+- PowerShell 5.1+ (ships with Windows) or PowerShell 7
 
-If PowerPoint is not installed, the script will exit with a clear error. Tell the user the skill cannot run in that environment.
+If PowerPoint is not installed the script exits with a clear error message.
 
-## Usage
+---
 
-The skill ships with one script: `scripts/Convert-SvgToShapes.ps1`.
+## Script 1 — `Convert-SvgToShapes.ps1`
 
-Invoke it from PowerShell:
+Creates a new .pptx with one slide per SVG, or appends slides to an existing deck.
+
+### Parameters
+
+| Parameter | Required | Description |
+|---|---|---|
+| `-SvgPath` | ✓ | `.svg` file(s) or a directory. Array accepted. |
+| `-OutputPath` | ✓ | Destination `.pptx`. Created if absent. |
+| `-Append` | | Append to existing `-OutputPath` instead of overwriting. |
+| `-Force` | | Skip overwrite confirmation. |
+
+### Usage
 
 ```powershell
-# Single SVG into a new deck
+# Single SVG → new deck
 pwsh -File scripts\Convert-SvgToShapes.ps1 `
     -SvgPath .\icon.svg `
     -OutputPath .\out.pptx
 
-# Batch-convert a folder of SVGs (one per slide)
+# Batch: folder of SVGs, one slide each
 pwsh -File scripts\Convert-SvgToShapes.ps1 `
     -SvgPath .\icons\ `
     -OutputPath .\icons.pptx
 
-# Append to an existing deck instead of creating a new one
+# Append to an existing deck
 pwsh -File scripts\Convert-SvgToShapes.ps1 `
     -SvgPath .\new-icons\ `
-    -OutputPath .\existing-deck.pptx `
+    -OutputPath .\existing.pptx `
     -Append
 ```
 
-Use `powershell.exe` instead of `pwsh` if PowerShell 7 is not installed.
+Use `powershell.exe` instead of `pwsh` when PowerShell 7 is not installed.
+
+---
+
+## Script 2 — `Edit-ExistingPptx.ps1`
+
+Inserts SVG-converted shapes into an existing branded PPTX, preserving all
+template formatting (backgrounds, master layouts, cover slide, TOC slide,
+footers, logos, etc.).
+
+### Two operation modes
+
+**INSERT mode** — target specific existing slides (one SVG per slide).
+Triggered when `-TargetSlide` is provided.
+
+**EXPAND mode** (default) — duplicate a "content template" slide once per SVG,
+place the copies at the desired position, then insert one SVG into each copy.
+Triggered automatically when `-TargetSlide` is omitted.
 
 ### Parameters
 
-- `-SvgPath` (required): one or more `.svg` file paths, or a directory. Accepts an array. If a directory is given, all `*.svg` files inside (non-recursive) are processed.
-- `-OutputPath` (required): destination `.pptx`. If it does not exist, a new deck is created. If it exists and `-Append` is set, slides are appended; otherwise the existing file is overwritten after a confirmation prompt (skipped with `-Force`).
-- `-Append` (switch): append to the existing `OutputPath` deck rather than overwriting.
-- `-Force` (switch): skip the overwrite confirmation.
+| Parameter | Mode | Default | Description |
+|---|---|---|---|
+| `-TemplatePath` | both | — | Existing `.pptx` to edit (required). |
+| `-SvgPath` | both | — | `.svg` file(s) or directory (required). |
+| `-OutputPath` | both | TemplatePath | Destination `.pptx`. Omit to edit in-place. |
+| `-TargetSlide` | INSERT | — | First slide index (1-based) to insert into. Additional SVGs → consecutive slides. |
+| `-ContentSlide` | EXPAND | last slide | Slide index to duplicate as the content page template. |
+| `-InsertAfterSlide` | EXPAND | last slide | New slides are inserted after this index. |
+| `-ContentZone` | both | auto-detect | SVG placement area: `"Left,Top,Width,Height"` in points. |
+| `-SlideTitles` | both | — | Array of title strings, one per SVG. Sets each slide's title placeholder. Blank/null entries keep the template title. |
+| `-ClearContent` | both | off | Delete all non-structural shapes before inserting SVG. Keeps title, footer, date, slide-number placeholders. |
+| `-NoBackup` | both | off | Skip creating `.bak.pptx` backup of the original. |
+| `-Force` | both | off | Skip overwrite confirmation for `-OutputPath`. |
 
-## How to invoke from Claude Code
+### Content zone auto-detection
 
-When the user is on Windows and asks to convert SVGs, run the script with bash/PowerShell tool. The script resolves relative paths to absolute internally, but passing absolute paths is safer and avoids ambiguity. Surface the script's stderr to the user verbatim if it fails; the error messages distinguish between "PowerPoint not installed", "file not found", and "ExecuteMso failed for this SVG".
+When `-ContentZone` is not provided, the script searches the reference slide for
+a content placeholder (body, object, chart, picture, media). If none is found it
+falls back to:
 
-Even if the script fails mid-run, the `finally` block guarantees PowerPoint is always closed and the COM object released — the user does not need to manually kill any PowerPoint process.
+```
+Left  = 36 pt  (0.5")
+Top   = 108 pt (1.5" — clears a standard title bar)
+Width  = SlideWidth  − 72 pt
+Height = SlideHeight − 126 pt
+```
 
-After a successful run, confirm the output path and mention the fidelity caveat: PowerPoint's built-in converter handles paths, basic shapes, and solid/simple-gradient fills well, but may flatten or drop complex SVG features (filters, clipPath chains, embedded raster images, certain advanced gradient stops). If the user reports a bad conversion on a specific SVG, that's a PowerPoint limitation, not a script bug — suggest simplifying the SVG (e.g., re-exporting from Figma/Illustrator without effects) or falling back to a pure-DrawingML library.
+Override with explicit points whenever the template uses a non-standard layout.
+To find point values: in PowerPoint, right-click a shape → Size and Position;
+multiply inches × 72 to get points.
 
-## Known limitations
+### Backup behaviour
 
-- **PowerPoint window must be visible during conversion.** `CommandBars.ExecuteMso` is a Ribbon command and unreliable when the PowerPoint window is hidden. The script sets `Visible = True` accordingly. The window is closed cleanly at the end.
-- **Cannot run alongside another PowerPoint session reliably.** If the user has PowerPoint open, COM may attach to that instance and produce surprising results. The script detects this and warns; recommend closing other PowerPoint windows first.
-- **One SVG per slide.** v1 places each SVG centered on its own blank slide. Multi-SVG layouts are out of scope.
-- **No headless mode.** Server/CI use is not supported. For headless, recommend the pure-Python `svg2pptx` library route.
-- **ExecuteMso timing sensitivity.** The script inserts a 250 ms pause before calling `ExecuteMso("SVGEdit")` to let PowerPoint's selection state settle. On slower machines a shape may silently remain unconverted (the script output will still show it as "failed"). If this happens, increase the `Start-Sleep -Milliseconds 250` line in the script to 500 ms or more.
-- **Slide dimensions follow the presentation's page setup.** When creating a new deck, PowerPoint uses its default slide size (typically 10"×7.5" for standard or 13.33"×7.5" for widescreen, depending on the Office version). The SVG is scaled to fill that canvas while preserving its aspect ratio (letterboxed if needed). There is currently no parameter to specify a custom slide size.
+A `.bak.pptx` copy of the original template is created automatically before any
+edit. Suppress with `-NoBackup`. The backup lives next to the original:
+
+```
+branded-template.pptx      ← original (will be edited / overwritten if OutputPath matches)
+branded-template.bak.pptx  ← backup created by the script
+```
+
+### Usage examples
+
+```powershell
+# ── EXPAND mode (most common) ────────────────────────────────
+# Template has: slide 1 = cover, slide 2 = TOC, slide 3 = content template.
+# Insert 5 SVGs as new content pages, duplicating slide 3, after slide 3.
+
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\branded.pptx `
+    -SvgPath      .\content-slides\ `
+    -ContentSlide 3 `
+    -InsertAfterSlide 3 `
+    -ClearContent
+
+# ── EXPAND mode with separate output ────────────────────────
+# Keep the original template untouched; write result to a new file.
+
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\branded.pptx `
+    -SvgPath      .\slides\ `
+    -ContentSlide 3 `
+    -OutputPath   .\presentation-final.pptx `
+    -ClearContent
+
+# ── EXPAND mode — append after last slide (defaults) ────────
+# Simplest invocation: duplicate the last slide for each SVG.
+
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\branded.pptx `
+    -SvgPath      .\slides\
+
+# ── INSERT mode — put one SVG into an existing slide ─────────
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\deck.pptx `
+    -SvgPath      .\chart.svg `
+    -TargetSlide  5
+
+# ── INSERT mode — replace content in slides 3, 4, 5 ─────────
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\deck.pptx `
+    -SvgPath      .\slide1.svg, .\slide2.svg, .\slide3.svg `
+    -TargetSlide  3 `
+    -ClearContent
+
+# ── Custom content zone (explicit points) ───────────────────
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\branded.pptx `
+    -SvgPath      .\slides\ `
+    -ContentZone  "54,126,852,378" `
+    -ClearContent
+
+# ── Set slide titles for each duplicated page ────────────────
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\branded.pptx `
+    -SvgPath      .\slides\ `
+    -ContentSlide    3 `
+    -InsertAfterSlide 2 `
+    -ClearContent `
+    -SlideTitles  "市场概述", "竞争格局", "战略规划", "执行路径"
+```
+
+### Typical workflow for branded templates
+
+A common PPTX structure and recommended invocation:
+
+```
+Slide 1  — Cover (封面)
+Slide 2  — Table of contents (目录)
+Slide 3  — Content template (正文内容，含标题占位符和内容区占位符)
+```
+
+```powershell
+# Step 1: Generate SVG files for each content page (Claude or any tool).
+# Step 2: Run the script to expand the deck.
+
+pwsh -File scripts\Edit-ExistingPptx.ps1 `
+    -TemplatePath .\company-deck.pptx `
+    -SvgPath         .\generated-slides\ `
+    -ContentSlide    3 `
+    -InsertAfterSlide 2 `
+    -ClearContent `
+    -SlideTitles "第一章：市场概述", "第二章：竞争格局", "第三章：战略规划"
+# Result:
+# Slide 1 — Cover   (unchanged)
+# Slide 2 — TOC     (unchanged)
+# Slide 3 — SVG 1   (duplicated from original slide 3, content replaced)
+# Slide 4 — SVG 2   (duplicated from original slide 3, content replaced)
+# ...
+# Slide N — original slide 3 template (now at end, can be deleted manually)
+```
+
+> **Tip:** To discard the original content template after expansion, insert
+> after the last real content slide (e.g. `-InsertAfterSlide 2`). The original
+> template slide migrates to the end; delete it manually in PowerPoint if
+> unneeded.
+
+---
+
+## How Claude should invoke these scripts
+
+1. Identify which script applies (new deck vs. existing template).
+2. Resolve all file paths to **absolute paths** before passing to the script;
+   COM is unreliable with relative paths.
+3. Run via the Bash tool using PowerShell:
+   ```powershell
+   pwsh -File "C:\path\scripts\Edit-ExistingPptx.ps1" -TemplatePath "C:\..." ...
+   # or for PowerShell 5.1:
+   powershell.exe -File "C:\path\scripts\Edit-ExistingPptx.ps1" ...
+   ```
+4. Surface `stderr` verbatim if the script fails. The error messages distinguish
+   between "PowerPoint not installed", "file not found", "slide out of range",
+   and "ExecuteMso failed".
+5. After a successful run, confirm the output path and mention the fidelity
+   caveat (see Known limitations).
+
+---
+
+## Known limitations (both scripts)
+
+- **PowerPoint window must be visible.** `ExecuteMso` is a Ribbon command;
+  it is unreliable when the window is hidden. Both scripts set `Visible = True`
+  and close cleanly at the end.
+- **Close other presentations first.** COM attaches to the running instance.
+  Open presentations can interfere with selection state. The scripts warn but
+  do not abort.
+- **No headless / CI support.** The visible-window requirement prevents
+  server/headless use. For headless conversion use the `svg2pptx` Python library
+  or a pure-DrawingML approach instead.
+- **SVG fidelity matches PowerPoint's built-in converter.** Paths, basic shapes,
+  and solid/simple-gradient fills convert well. Complex filters, `clipPath`
+  chains, embedded raster images, and advanced gradient stops may be flattened
+  or dropped. This is a PowerPoint limitation; simplify the SVG (re-export
+  without effects from Figma/Illustrator) if quality is poor.
+- **ExecuteMso timing.** A 300 ms pause is inserted before `ExecuteMso("SVGEdit")`
+  to let the selection settle. On slower machines a shape may silently remain
+  unconverted. If this happens, increase `Start-Sleep -Milliseconds 300` to
+  `500` or more in the script.
+- **One SVG per slide.** Each SVG occupies its own slide. Multi-SVG layouts on
+  a single slide are out of scope.
+- **Windows only.** Both scripts require Windows + COM automation. There is no
+  macOS/Linux equivalent; suggest `svg2pptx` or DrawingML libraries for
+  cross-platform needs.
 
 ## Verifying the output
 
-After running, the user can confirm the conversion worked by opening the `.pptx` and right-clicking any inserted graphic — if the context menu shows "Edit Points" or the shape can be ungrouped into individual sub-shapes, the conversion succeeded. If the menu still shows "Convert to Shape" for a graphic, that one did not convert (rare — usually a malformed SVG); the script's stderr will have noted it.
+Open the `.pptx` and right-click any inserted shape. If the context menu shows
+**Edit Points** or the shape can be ungrouped into individual sub-shapes, the
+conversion succeeded. If the menu still shows **Convert to Shape**, that shape
+did not convert (usually a malformed SVG); the script's stderr will have noted it.
