@@ -183,10 +183,15 @@ $PP_CENTER_TITLE   = 3
 $PP_SUBTITLE       = 4
 $PP_VERT_TITLE     = 5
 $PP_VERT_BODY      = 6
-$PP_DATE           = 16
-$PP_FOOTER         = 15
-$PP_SLIDE_NUMBER   = 13
 $PP_OBJECT         = 7
+$PP_CHART          = 8
+$PP_TABLE          = 9
+$PP_CLIP_ART       = 10
+$PP_ORG_CHART      = 11
+$PP_MEDIA          = 12
+$PP_SLIDE_NUMBER   = 13
+$PP_FOOTER         = 15
+$PP_DATE           = 16
 
 # Types that stay when -ClearContent is used (structural chrome)
 $KEEPER_TYPES = @($PP_TITLE, $PP_CENTER_TITLE, $PP_SUBTITLE,
@@ -194,7 +199,7 @@ $KEEPER_TYPES = @($PP_TITLE, $PP_CENTER_TITLE, $PP_SUBTITLE,
                   $PP_DATE, $PP_FOOTER, $PP_SLIDE_NUMBER)
 
 # Types considered "content zone" for auto-detection
-$CONTENT_PH_TYPES = @($PP_BODY, $PP_OBJECT, 8, 9, 10, 11, 12)
+$CONTENT_PH_TYPES = @($PP_BODY, $PP_OBJECT, $PP_CHART, $PP_TABLE, $PP_CLIP_ART, $PP_ORG_CHART, $PP_MEDIA)
 
 # ──────────────────────────────────────────────────────────────
 # Helper: case-insensitive property access for hashtables/JSON objects
@@ -516,9 +521,10 @@ function Invoke-TextReplacements {
             Invoke-ShapeRecursive -Shape $shape -Action {
                 param($s)
                 $current = Get-ShapeText -Shape $s
-                if ($null -ne $current -and $current.Contains("$find")) {
+                if ($null -ne $current -and $current.IndexOf("$find", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                     try {
-                        $s.TextFrame.TextRange.Text = $current.Replace("$find", "$replace")
+                        # Use Regex.Replace for case-insensitive replacement
+                        $s.TextFrame.TextRange.Text = [regex]::Replace($current, [regex]::Escape("$find"), "$replace", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
                         $matchCountRef.Value++
                     } catch { }
                 }
@@ -601,7 +607,7 @@ function Set-SlideTexts {
 # ──────────────────────────────────────────────────────────────
 # Helper: insert one SVG into a slide and convert to shapes
 # ──────────────────────────────────────────────────────────────
-function Insert-SvgIntoSlide {
+function Add-SvgToSlide {
     param(
         $PptApp,
         $Slide,
@@ -657,7 +663,7 @@ function Insert-SvgIntoSlide {
 # ──────────────────────────────────────────────────────────────
 # Helper: release COM object
 # ──────────────────────────────────────────────────────────────
-function Release-Com {
+function Remove-ComObject {
     param([object]$Obj)
     if ($null -ne $Obj) {
         try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($Obj) } catch { }
@@ -810,7 +816,7 @@ try {
                     if (Test-HasTextEditSpec -Texts $perSlide) { $textEditCount++ }
                 }
 
-                if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svg -Zone $zone) {
+                if (Add-SvgToSlide -PptApp $ppt -Slide $workSlide -SvgFile $svg -Zone $zone) {
                     $convertedCount++
                 } else {
                     $failedItems += $svg
@@ -862,7 +868,7 @@ try {
                     if (Test-HasTextEditSpec -Texts $perSlide) { $textEditCount++ }
                 }
 
-                if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svg -Zone $zone) {
+                if (Add-SvgToSlide -PptApp $ppt -Slide $workSlide -SvgFile $svg -Zone $zone) {
                     $convertedCount++
                 } else {
                     $failedItems += $svg
@@ -919,7 +925,7 @@ try {
                         Set-SlideTexts -Slide $workSlide -Texts $edit
                         if (Test-HasTextEditSpec -Texts $edit) { $textEditCount++ }
 
-                        if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svgFile -Zone $zone) {
+                        if (Add-SvgToSlide -PptApp $ppt -Slide $workSlide -SvgFile $svgFile -Zone $zone) {
                             $convertedCount++
                         } else {
                             $failedItems += $svgFile
@@ -977,7 +983,7 @@ try {
                             Set-SlideTexts -Slide $workSlide -Texts $item
                             if (Test-HasTextEditSpec -Texts $item) { $textEditCount++ }
 
-                            if (Insert-SvgIntoSlide -PptApp $ppt -Slide $workSlide -SvgFile $svgFile -Zone $zone) {
+                            if (Add-SvgToSlide -PptApp $ppt -Slide $workSlide -SvgFile $svgFile -Zone $zone) {
                                 $convertedCount++
                             } else {
                                 $failedItems += $svgFile
@@ -999,9 +1005,9 @@ try {
     $pres.Close()
 
 } finally {
-    if ($null -ne $pres) { Release-Com $pres }
+    if ($null -ne $pres) { Remove-ComObject $pres }
     try { $ppt.Quit() } catch { }
-    Release-Com $ppt
+    Remove-ComObject $ppt
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
 }

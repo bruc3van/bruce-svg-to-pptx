@@ -153,7 +153,7 @@ function Get-SvgIntrinsicSize {
     }
 }
 
-function Release-Com {
+function Remove-ComObject {
     param([object]$ComObject)
     if ($null -ne $ComObject) {
         try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($ComObject) } catch {}
@@ -258,10 +258,11 @@ try {
         try {
             $slide.Select()
             $shape.Select()
-            # Tiny pause: ExecuteMso occasionally races the selection update.
-            Start-Sleep -Milliseconds 250
-
+            # Pre-pause: ExecuteMso occasionally races the selection update.
+            Start-Sleep -Milliseconds 300
             $ppt.CommandBars.ExecuteMso("SVGEdit")
+            # Post-pause: allow PowerPoint to finish the conversion before the next operation.
+            Start-Sleep -Milliseconds 200
             $convertedCount++
         } catch {
             Write-Warning "    ExecuteMso('SVGEdit') failed: $($_.Exception.Message)"
@@ -281,9 +282,9 @@ try {
     $pres.Close()
 }
 finally {
-    if ($null -ne $pres) { Release-Com $pres }
+    if ($null -ne $pres) { Remove-ComObject $pres }
     try { $ppt.Quit() } catch {}
-    Release-Com $ppt
+    Remove-ComObject $ppt
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
 }

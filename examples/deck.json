@@ -9,7 +9,10 @@
       "shapeTexts": [
         { "shapeName": "CoverTagline", "text": "内部讨论稿" }
       ],
-      "date":     "2026-05"
+      "replacements": [
+        { "find": "{{year}}", "replace": "2026" }
+      ],
+      "date": "2026-05"
     },
     {
       "type":  "text",
@@ -22,10 +25,16 @@
       "templateSlide": 3,
       "insertAfter":   2,
       "clearContent":  true,
+      "contentZone":   "36,108,648,378",
       "items": [
         { "svg": "slides/s1.svg", "title": "第一章：市场概述" },
         { "svg": "slides/s2.svg", "title": "第二章：竞争格局" },
-        { "svg": "slides/s3.svg", "title": "第三章：战略规划" }
+        {
+          "svg":   "slides/s3.svg",
+          "title": "第三章：战略规划",
+          "shapeTexts":   [{ "shapeName": "DataSource", "text": "数据来源：2026 行业报告" }],
+          "replacements": [{ "find": "{{draft}}", "replace": "终稿" }]
+        }
       ]
     },
     {
@@ -33,7 +42,8 @@
       "slide":        9,
       "svg":          "slides/closing-chart.svg",
       "title":        "结语",
-      "clearContent": true
+      "clearContent": true,
+      "contentZone":  "72,130,576,340"
     }
   ]
 }
