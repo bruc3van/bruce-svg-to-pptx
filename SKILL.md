@@ -62,7 +62,7 @@ Get-ChildItem -Path "$HOME\.claude\skills" -Recurse -Filter "Convert-SvgToShapes
 | 墨绿科技 | `#1A3C34` | `#2ECC71` | `#F0F4F2` |
 | 暖橙活力 | `#7B2D00` | `#E67E22` | `#FAFAFA` |
 
-每张内容页选一种视觉结构——读 `references/svg-design.md` 帮助判断最适合的结构（并列、总分、流程、循环、金字塔、对比、聚焦）。
+每张内容页选一种视觉结构——读 `references/svg-design.md` 判断最适合的结构。**选择顺序：优先匹配"用户布局库"（UL-1 至 UL-5，来自用户实际使用的版式）；无合适匹配时再使用通用结构（并列、总分、流程、循环、金字塔、对比、聚焦）**。
 
 ### 第三步：逐张生成并立即验证 SVG
 
