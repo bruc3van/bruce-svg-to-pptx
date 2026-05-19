@@ -263,7 +263,17 @@ try {
             $ppt.CommandBars.ExecuteMso("SVGEdit")
             # Post-pause: allow PowerPoint to finish the conversion before the next operation.
             Start-Sleep -Milliseconds 200
-            $convertedCount++
+            # Verify conversion: a successful SVGEdit invalidates the original COM proxy,
+            # so accessing $shape.Type will throw. If it doesn't throw and still reports
+            # msoGraphic, the SVG contained unsupported features and was not converted.
+            $converted = $true
+            try {
+                if ($shape.Type -eq $msoGraphic) {
+                    Write-Warning "    SVGEdit ran but shape is still msoGraphic — SVG may contain unsupported features."
+                    $converted = $false
+                }
+            } catch { }  # COM proxy invalidated = conversion succeeded (expected path)
+            if ($converted) { $convertedCount++ } else { $failedItems += $svg }
         } catch {
             Write-Warning "    ExecuteMso('SVGEdit') failed: $($_.Exception.Message)"
             $failedItems += $svg
@@ -271,10 +281,7 @@ try {
     }
 
     Write-Host "Saving to $OutputPath..."
-    if ($outputExists -and -not $Append) {
-        # Overwriting an existing file: SaveAs handles this with the format arg.
-        $pres.SaveAs($OutputPath, $ppSaveAsOpenXMLPresentation)
-    } elseif ($outputExists -and $Append) {
+    if ($outputExists -and $Append) {
         $pres.Save()
     } else {
         $pres.SaveAs($OutputPath, $ppSaveAsOpenXMLPresentation)

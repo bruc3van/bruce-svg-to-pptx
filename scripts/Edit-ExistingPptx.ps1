@@ -516,6 +516,8 @@ function Invoke-TextReplacements {
         }
         if ($null -eq $replace) { $replace = '' }
 
+        # Escape $ in replacement so .NET regex doesn't treat $1/$9/$& etc. as group references
+        $replaceSafe = $replace -replace '\$', '$$$$'
         $matchCountRef = [ref]0
         foreach ($shape in $Slide.Shapes) {
             Invoke-ShapeRecursive -Shape $shape -Action {
@@ -523,8 +525,7 @@ function Invoke-TextReplacements {
                 $current = Get-ShapeText -Shape $s
                 if ($null -ne $current -and $current.IndexOf("$find", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                     try {
-                        # Use Regex.Replace for case-insensitive replacement
-                        $s.TextFrame.TextRange.Text = [regex]::Replace($current, [regex]::Escape("$find"), "$replace", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                        $s.TextFrame.TextRange.Text = [regex]::Replace($current, [regex]::Escape("$find"), $replaceSafe, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
                         $matchCountRef.Value++
                     } catch { }
                 }
